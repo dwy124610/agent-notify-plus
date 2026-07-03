@@ -31,7 +31,7 @@ Claude Code supports these hooks:
 Codex supports these hooks:
 
 - `UserPromptSubmit`: only records this turn's start time server-side; no phone notification.
-- `PermissionRequest`: pushes when Codex needs user permission; not pushed when `permission_mode` is `bypassPermissions`.
+- `PermissionRequest`: Codex permission notifications, off by default; pushed only when `notifyPermissionRequests` is `true` in the adapter config.
 - `Stop`: pushes a completion notification after the task exceeds the server completion threshold (default `120` seconds).
 
 ## Manual notification switch
@@ -537,7 +537,7 @@ AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS=120
 
 Long-task completion notifications are on by default, threshold `120` seconds: only after a task runs longer than 120 seconds is a completion notification pushed when it ends.
 
-To turn completion notifications off, set the threshold to `0`. With `0`, Codex's permission notifications still fire; only completion notifications are skipped.
+To turn completion notifications off, set the threshold to `0`. Completion notifications and Codex permission notifications are independent; Codex permission notifications are controlled by `notifyPermissionRequests` in the adapter config and are off by default.
 
 Start the service:
 
@@ -559,7 +559,8 @@ The minimal config after copying:
 ```json
 {
   "serverUrl": "http://127.0.0.1:8787",
-  "token": "my-long-random-token"
+  "token": "my-long-random-token",
+  "notifyPermissionRequests": false
 }
 ```
 
@@ -567,6 +568,7 @@ Configurable fields:
 
 - `serverUrl`: required. The AgentNotify server URL.
 - `token`: required. Only the part after the colon in `AGENT_NOTIFY_TOKENS`.
+- `notifyPermissionRequests`: optional. Whether to push Codex `PermissionRequest` notifications, default `false`. Keep it off for Codex Desktop auto-approval; set it to `true` when using CLI flows that need manual approval.
 - `timeoutMs`: optional. Adapter request timeout in milliseconds, default `2000`.
 - `debugLogPath`: optional. When set, the adapter writes every event it sees to this JSONL file, to help confirm whether events reach the adapter. Off by default.
 
@@ -652,9 +654,9 @@ Keep the AgentNotify service running:
 pnpm dev
 ```
 
-Lower Codex's permissions and trigger an action that needs approval, e.g. have it run a shell command that needs approval. You should get a notification titled `Approve permission` or `需要批准`.
+Run a task longer than `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS`. A completion notification fires when the task ends. Short tasks do not trigger completion notifications.
 
-Then run a task longer than `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS`. A completion notification fires when the task ends. Short tasks do not trigger completion notifications.
+If you set `notifyPermissionRequests` to `true`, lower Codex's permissions and trigger an action that needs approval, e.g. have it run a shell command that needs approval. You should then get a notification titled `Approve permission` or `需要批准`.
 
 ## Common commands
 
@@ -913,9 +915,9 @@ Check in order:
 3. Whether all three events (`UserPromptSubmit`, `PermissionRequest`, `Stop`) are configured in `~/.codex/hooks.json`, and the command points to `node /absolute/path/.config/agent-notify/codex-agent-notify.mjs`.
 4. Whether the command path actually exists: `ls /absolute/path/.config/agent-notify/codex-agent-notify.mjs`.
 5. **Whether Codex `/hooks` has trusted this hook.** Until trusted, Codex skips non-managed hooks — this is the most common "configured but not working" cause with Codex. After the command path changes you must re-trust it too.
-6. Whether `permission_mode` is `bypassPermissions` — in that mode `PermissionRequest` is not pushed (by design, not a bug).
+6. If only Codex permission notifications are missing, check whether `notifyPermissionRequests` is `true` in `~/.config/agent-notify/codex.json`. The default is `false`, keeping only completion notifications.
 
-Test the adapter with a manual payload first:
+If you are debugging Codex permission notifications, first confirm `notifyPermissionRequests` is `true`, then test the adapter with a manual payload:
 
 ```bash
 printf '{"hook_event_name":"PermissionRequest","session_id":"manual_debug","tool_name":"Bash","tool_input":{"command":"echo debug"}}' | node /ABS/PATH/.config/agent-notify/codex-agent-notify.mjs

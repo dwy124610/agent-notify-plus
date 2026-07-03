@@ -294,9 +294,12 @@ cp examples/codex/skills/agent-notify/SKILL.md ~/.codex/skills/agent-notify/SKIL
 ```json
 {
   "serverUrl": "http://127.0.0.1:8787",
-  "token": "<the part after the colon in the server's AGENT_NOTIFY_TOKENS>"
+  "token": "<the part after the colon in the server's AGENT_NOTIFY_TOKENS>",
+  "notifyPermissionRequests": false
 }
 ```
+
+Leave `notifyPermissionRequests` at `false` during first-time install. This keeps Codex permission prompts quiet for auto-approval workflows while preserving long-task completion notifications.
 
 **Get the adapter's absolute path**:
 

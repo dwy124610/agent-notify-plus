@@ -66,7 +66,7 @@ describe("CodexSessionPolicy", () => {
     expect(policy.sessionCount()).toBe(0);
   });
 
-  it("suppresses bypassed PermissionRequest events", () => {
+  it("continues PermissionRequest events regardless of permission mode", () => {
     const policy = new CodexSessionPolicy({
       completionMinSeconds: 120,
       nowMs: () => 1_000,
@@ -85,14 +85,11 @@ describe("CodexSessionPolicy", () => {
         "macbook",
       ),
     ).toEqual({
-      action: "suppress",
-      reason: "permission_bypassed",
-      sourceEvent: "PermissionRequest",
-      sessionId: "session_1",
+      action: "continue",
     });
   });
 
-  it("suppresses bypassed Stop events", () => {
+  it("continues bypassed Stop events after the completion threshold", () => {
     let nowMs = 1_000;
     const policy = new CodexSessionPolicy({
       completionMinSeconds: 120,
@@ -115,10 +112,7 @@ describe("CodexSessionPolicy", () => {
         "macbook",
       ),
     ).toEqual({
-      action: "suppress",
-      reason: "permission_bypassed",
-      sourceEvent: "Stop",
-      sessionId: "session_1",
+      action: "continue",
     });
     expect(policy.sessionCount()).toBe(0);
   });

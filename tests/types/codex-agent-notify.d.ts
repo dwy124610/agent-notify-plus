@@ -3,6 +3,7 @@ declare module "*codex/codex-agent-notify.mjs" {
     serverUrl: string;
     token: string;
     timeoutMs: number;
+    notifyPermissionRequests: boolean;
     debugLogPath?: string;
   }
   export type AgentNotifyCommand =
@@ -22,7 +23,10 @@ declare module "*codex/codex-agent-notify.mjs" {
     readError?: string;
   }
   export function parseCodexConfig(raw: Record<string, unknown>): CodexConfig;
-  export function shouldForwardCodexEvent(raw: unknown): boolean;
+  export function shouldForwardCodexEvent(
+    raw: unknown,
+    config?: Partial<CodexConfig>,
+  ): boolean;
   export function summarizeCodexEventForDebug(raw: unknown): Record<string, unknown>;
   export function sendCodexEvent(
     serverUrl: string,

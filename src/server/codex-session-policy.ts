@@ -30,8 +30,7 @@ export type CodexSessionPolicyDecision =
         | "completion_disabled"
         | "missing_session"
         | "missing_start"
-        | "below_threshold"
-        | "permission_bypassed";
+        | "below_threshold";
       sourceEvent?: string;
       sessionId?: string;
     };
@@ -52,11 +51,6 @@ function hookEventName(raw: unknown): string | undefined {
 function sessionId(raw: unknown): string | undefined {
   if (!isRecord(raw)) return undefined;
   return getString(raw.session_id);
-}
-
-function permissionMode(raw: unknown): string | undefined {
-  if (!isRecord(raw)) return undefined;
-  return getString(raw.permission_mode);
 }
 
 export class CodexSessionPolicy {
@@ -86,18 +80,6 @@ export class CodexSessionPolicy {
     const id = sessionId(event.raw);
     const pinnedCwd = this.resolveCwd(tokenName, id, event.raw);
 
-    if (
-      sourceEvent === "PermissionRequest" &&
-      permissionMode(event.raw) === "bypassPermissions"
-    ) {
-      return {
-        action: "suppress",
-        reason: "permission_bypassed",
-        sourceEvent,
-        sessionId: id,
-      };
-    }
-
     if (sourceEvent === "UserPromptSubmit") {
       if (!id) {
         return { action: "suppress", reason: "missing_session", sourceEvent };
@@ -119,15 +101,6 @@ export class CodexSessionPolicy {
       const key = this.key(tokenName, id);
       const session = this.sessions.get(key);
       this.sessions.delete(key);
-
-      if (permissionMode(event.raw) === "bypassPermissions") {
-        return {
-          action: "suppress",
-          reason: "permission_bypassed",
-          sourceEvent,
-          sessionId: id,
-        };
-      }
 
       if (this.completionMinSeconds <= 0) {
         return {

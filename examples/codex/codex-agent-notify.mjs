@@ -44,17 +44,10 @@ function getToolName(raw) {
     : undefined;
 }
 
-function getPermissionMode(raw) {
-  if (!isRecord(raw)) return undefined;
-  return typeof raw.permission_mode === "string" && raw.permission_mode.trim()
-    ? raw.permission_mode
-    : undefined;
-}
-
-export function shouldForwardCodexEvent(raw) {
+export function shouldForwardCodexEvent(raw, config = {}) {
   const hookEventName = getHookEventName(raw);
   if (hookEventName === "PermissionRequest") {
-    return getPermissionMode(raw) !== "bypassPermissions";
+    return config.notifyPermissionRequests === true;
   }
   return typeof hookEventName === "string" && NOTIFY_EVENT_NAMES.has(hookEventName);
 }
@@ -376,6 +369,9 @@ export function parseCodexConfig(raw) {
     serverUrl: readRequiredString(raw, "serverUrl"),
     token: readRequiredString(raw, "token"),
     timeoutMs: readOptionalNumber(raw, "timeoutMs") ?? DEFAULT_TIMEOUT_MS,
+    notifyPermissionRequests:
+      readOptionalBoolean(raw.notifyPermissionRequests, "notifyPermissionRequests") ??
+      false,
     debugLogPath: readOptionalString(raw, "debugLogPath"),
   };
 }
@@ -470,7 +466,7 @@ export async function handleCodexEvent(config, raw, deps = {}) {
     };
   }
 
-  const forwarded = shouldForwardCodexEvent(raw);
+  const forwarded = shouldForwardCodexEvent(raw, config);
   if (!forwarded) return { forwarded: false, sent: false };
 
   const muted = getCodexMuteReason(state, sessionId, now);

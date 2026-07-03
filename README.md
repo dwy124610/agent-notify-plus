@@ -32,7 +32,7 @@ AgentNotify receives hook events from OpenCode, Claude Code, and Codex, formats 
 | --- | --- | --- |
 | OpenCode | plugin example | permission / question / session-error / idle-completion events |
 | Claude Code | command hook + adapter | `UserPromptSubmit`, selected `Notification`, `Stop`, `StopFailure` |
-| Codex | command hook + adapter | `UserPromptSubmit`, `PermissionRequest`, `Stop` |
+| Codex | command hook + adapter | `UserPromptSubmit`, `Stop`, optional `PermissionRequest` |
 
 The adapter is fail-safe: server errors never block the agent. Long-task completion is tracked in the AgentNotify server, so adapters stay stateless.
 

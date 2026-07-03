@@ -515,7 +515,7 @@ describe("server app", () => {
     });
   });
 
-  it("suppresses bypassed Codex PermissionRequest without sending a notification", async () => {
+  it("sends Codex PermissionRequest without inspecting permission_mode", async () => {
     const mockProvider = provider();
     const app = createApp({
       ...appOptions(mockProvider),
@@ -531,6 +531,9 @@ describe("server app", () => {
           permission_mode: "bypassPermissions",
           session_id: "codex_permission",
           tool_name: "Bash",
+          tool_input: {
+            description: "Codex wants to run pnpm test",
+          },
         },
       }),
       headers: {
@@ -540,8 +543,14 @@ describe("server app", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, notified: false });
-    expect(mockProvider.send).not.toHaveBeenCalled();
+    expect(await res.json()).toMatchObject({ ok: true });
+    expect(mockProvider.send).toHaveBeenCalledWith({
+      title: "Approve permission",
+      body: "Codex wants to run pnpm test",
+      urgency: "time_sensitive",
+      group: "Codex",
+      icon: "https://cdn.jsdelivr.net/gh/LetTTGACO/agent-notify@main/assets/codex.png",
+    });
   });
 
   it("suppresses Codex Stop before the completion threshold", async () => {

@@ -31,7 +31,7 @@ AgentNotify 接收 OpenCode、Claude Code 和 Codex 的 hook 事件，在服务�
 | --- | --- | --- |
 | OpenCode | plugin 示例 | permission / question / session-error / idle-completion 事件 |
 | Claude Code | command hook + adapter | `UserPromptSubmit`、选定的 `Notification`、`Stop`、`StopFailure` |
-| Codex | command hook + adapter | `UserPromptSubmit`、`PermissionRequest`、`Stop` |
+| Codex | command hook + adapter | `UserPromptSubmit`、`Stop`，可选 `PermissionRequest` |
 
 Adapter 是 fail-safe 的：服务端错误不会阻塞 agent。长任务完成状态由 AgentNotify 服务端跟踪，因此 adapter 保持无状态。
 

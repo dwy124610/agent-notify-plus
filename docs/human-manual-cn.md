@@ -31,7 +31,7 @@ Claude Code 侧支持这些 hooks：
 Codex 侧支持这些 hooks：
 
 - `UserPromptSubmit`：只用于服务端记录本轮开始时间，不推送手机通知
-- `PermissionRequest`：Codex 需要用户批准权限时推送；`permission_mode` 为 `bypassPermissions` 时不推送
+- `PermissionRequest`：Codex 权限通知，默认不推送；在 adapter 配置里把 `notifyPermissionRequests` 设为 `true` 后才推送
 - `Stop`：长任务达到服务端完成阈值（默认 `120` 秒）后推送完成通知
 
 ## 手动通知开关
@@ -539,7 +539,7 @@ AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS=120
 
 长任务完成通知默认开启，阈值为 `120` 秒：任务运行超过 120 秒后，结束时才会推送完成通知。
 
-如果想关掉完成通知，把阈值设为 `0`。设为 `0` 后，Codex 的权限通知仍然会发送，只是不再发送完成通知。
+如果想关掉完成通知，把阈值设为 `0`。完成通知和 Codex 权限通知互相独立；Codex 权限通知由 adapter 配置里的 `notifyPermissionRequests` 控制，默认关闭。
 
 启动服务：
 
@@ -561,7 +561,8 @@ cp examples/codex/codex.json ~/.config/agent-notify/codex.json
 ```json
 {
   "serverUrl": "http://127.0.0.1:8787",
-  "token": "my-long-random-token"
+  "token": "my-long-random-token",
+  "notifyPermissionRequests": false
 }
 ```
 
@@ -569,6 +570,7 @@ cp examples/codex/codex.json ~/.config/agent-notify/codex.json
 
 - `serverUrl`：必填。AgentNotify 服务地址。
 - `token`：必填。只填 `.env` 里 `AGENT_NOTIFY_TOKENS` 冒号后面的部分。
+- `notifyPermissionRequests`：可选。是否推送 Codex `PermissionRequest` 权限通知，默认 `false`。桌面端使用自动审批时建议保持关闭；CLI 下需要手动批准时可设为 `true`。
 - `timeoutMs`：可选。adapter 请求超时时间，单位是毫秒，默认 `2000`。
 - `debugLogPath`：可选。配置后，adapter 会把自己看到的每个事件写进这个 JSONL 文件，方便排查事件是否进入 adapter。默认不填。
 
@@ -654,9 +656,9 @@ hook 负责识别 `/agent-notify` 命令并写入状态文件；skill 负责让 
 pnpm dev
 ```
 
-调低 Codex 的权限，在 Codex 里触发一次需要权限的操作，例如让它运行需要审批的 shell 命令。你应该收到标题为 `Approve permission` 或 `需要批准` 的通知。
+运行一次超过 `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS` 的任务。任务结束后会触发完成通知。短任务不会触发完成通知。
 
-再运行一次超过 `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS` 的任务。任务结束后会触发完成通知。短任务不会触发完成通知。
+如果你把 `notifyPermissionRequests` 设为 `true`，再调低 Codex 的权限并触发一次需要审批的操作，例如让它运行需要审批的 shell 命令。此时你应该收到标题为 `Approve permission` 或 `需要批准` 的通知。
 
 ## 常用命令
 
@@ -915,9 +917,9 @@ tail -f ~/.config/agent-notify/claude-code-debug.jsonl
 3. `~/.codex/hooks.json` 里三个事件（`UserPromptSubmit`、`PermissionRequest`、`Stop`）是否都配了，command 是否指向 `node /绝对路径/.config/agent-notify/codex-agent-notify.mjs`。
 4. command 路径是否真实存在：`ls /绝对路径/.config/agent-notify/codex-agent-notify.mjs`。
 5. **Codex `/hooks` 是否已经 trust 这条 hook**。未 trust 前 Codex 会跳过非 managed hook，这是 Codex 最常见的「配了但不生效」原因。command 路径变化后也需要重新 trust。
-6. `permission_mode` 是否为 `bypassPermissions`——这种模式下 `PermissionRequest` 不会推送（设计如此，不是 bug）。
+6. 如果只缺 Codex 权限通知，检查 `~/.config/agent-notify/codex.json` 里的 `notifyPermissionRequests` 是否为 `true`。默认是 `false`，只保留完成通知。
 
-先用手动 payload 测试 adapter：
+如果你正在排查 Codex 权限通知，先确认 `notifyPermissionRequests` 是 `true`，再用手动 payload 测试 adapter：
 
 ```bash
 printf '{"hook_event_name":"PermissionRequest","session_id":"manual_debug","tool_name":"Bash","tool_input":{"command":"echo debug"}}' | node /ABS/PATH/.config/agent-notify/codex-agent-notify.mjs

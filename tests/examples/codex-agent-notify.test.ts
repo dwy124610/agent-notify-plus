@@ -35,13 +35,24 @@ describe("Codex adapter example", () => {
       adapter.shouldForwardCodexEvent({
         hook_event_name: "PermissionRequest",
       }),
+    ).toBe(false);
+    expect(
+      adapter.shouldForwardCodexEvent(
+        {
+          hook_event_name: "PermissionRequest",
+        },
+        { notifyPermissionRequests: true },
+      ),
     ).toBe(true);
     expect(
-      adapter.shouldForwardCodexEvent({
-        hook_event_name: "PermissionRequest",
-        permission_mode: "bypassPermissions",
-      }),
-    ).toBe(false);
+      adapter.shouldForwardCodexEvent(
+        {
+          hook_event_name: "PermissionRequest",
+          permission_mode: "bypassPermissions",
+        },
+        { notifyPermissionRequests: true },
+      ),
+    ).toBe(true);
     expect(
       adapter.shouldForwardCodexEvent({
         hook_event_name: "Stop",
@@ -62,6 +73,7 @@ describe("Codex adapter example", () => {
     });
 
     expect(config.timeoutMs).toBe(2_000);
+    expect(config.notifyPermissionRequests).toBe(false);
   });
 
   it("uses the configured timeoutMs", () => {
@@ -72,6 +84,16 @@ describe("Codex adapter example", () => {
     });
 
     expect(config.timeoutMs).toBe(5_000);
+  });
+
+  it("uses the configured Codex permission notification preference", () => {
+    const config = adapter.parseCodexConfig({
+      serverUrl: "http://127.0.0.1:8787",
+      token: "secret",
+      notifyPermissionRequests: true,
+    });
+
+    expect(config.notifyPermissionRequests).toBe(true);
   });
 
   it("parses AgentNotify commands for Codex", () => {
@@ -299,6 +321,7 @@ describe("Codex adapter example", () => {
           serverUrl: "http://127.0.0.1:8787",
           token: "secret",
           timeoutMs: 2_000,
+          notifyPermissionRequests: true,
         },
         {
           hook_event_name: "PermissionRequest",
@@ -335,6 +358,7 @@ describe("Codex adapter example", () => {
           serverUrl: "http://127.0.0.1:8787",
           token: "secret",
           timeoutMs: 2_000,
+          notifyPermissionRequests: true,
         },
         {
           hook_event_name: "UserPromptSubmit",
@@ -377,6 +401,7 @@ describe("Codex adapter example", () => {
           serverUrl: "http://127.0.0.1:8787",
           token: "secret",
           timeoutMs: 2_000,
+          notifyPermissionRequests: true,
         },
         {
           hook_event_name: "PermissionRequest",
@@ -421,6 +446,7 @@ describe("Codex adapter example", () => {
           serverUrl: "http://127.0.0.1:8787",
           token: "secret",
           timeoutMs: 2_000,
+          notifyPermissionRequests: true,
         },
         {
           hook_event_name: "PermissionRequest",
@@ -468,6 +494,7 @@ describe("Codex adapter example", () => {
           serverUrl: "http://127.0.0.1:8787",
           token: "secret",
           timeoutMs: 2_000,
+          notifyPermissionRequests: true,
         },
         {
           hook_event_name: "PermissionRequest",
