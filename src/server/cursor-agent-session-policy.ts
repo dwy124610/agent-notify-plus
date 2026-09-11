@@ -1,4 +1,5 @@
 import type { IncomingAgentEvent } from "../core/incoming-event.js";
+import { normalizeCursorHookEvent } from "../formatters/cursor-agent.js";
 
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_SESSIONS = 1000;
@@ -14,14 +15,14 @@ interface PinnedCwd {
   startedAtMs: number;
 }
 
-export interface CodexSessionPolicyOptions {
+export interface CursorAgentSessionPolicyOptions {
   completionMinSeconds: number;
   ttlMs?: number;
   maxSessions?: number;
   nowMs?: () => number;
 }
 
-export type CodexSessionPolicyDecision =
+export type CursorAgentSessionPolicyDecision =
   | { action: "continue"; cwd?: string }
   | {
       action: "suppress";
@@ -45,15 +46,30 @@ function getString(value: unknown): string | undefined {
 
 function hookEventName(raw: unknown): string | undefined {
   if (!isRecord(raw)) return undefined;
-  return getString(raw.hook_event_name);
+  return normalizeCursorHookEvent(raw.hook_event_name);
 }
 
 function sessionId(raw: unknown): string | undefined {
   if (!isRecord(raw)) return undefined;
-  return getString(raw.session_id);
+  return getString(raw.session_id) ?? getString(raw.conversation_id);
 }
 
-export class CodexSessionPolicy {
+function stopStatus(raw: unknown): string {
+  if (!isRecord(raw)) return "completed";
+  return (getString(raw.status) ?? getString(raw.reason) ?? "completed").toLowerCase();
+}
+
+function resolveCwdValue(raw: unknown): string | undefined {
+  if (!isRecord(raw)) return undefined;
+  const cwd = getString(raw.cwd);
+  if (cwd) return cwd;
+  if (Array.isArray(raw.workspace_roots)) {
+    return getString(raw.workspace_roots[0]);
+  }
+  return undefined;
+}
+
+export class CursorAgentSessionPolicy {
   private readonly completionMinSeconds: number;
   private readonly ttlMs: number;
   private readonly maxSessions: number;
@@ -61,7 +77,7 @@ export class CodexSessionPolicy {
   private readonly sessions = new Map<string, SessionState>();
   private readonly cwdBySession = new Map<string, PinnedCwd>();
 
-  constructor(options: CodexSessionPolicyOptions) {
+  constructor(options: CursorAgentSessionPolicyOptions) {
     this.completionMinSeconds = options.completionMinSeconds;
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
@@ -71,8 +87,8 @@ export class CodexSessionPolicy {
   apply(
     event: IncomingAgentEvent,
     tokenName: string,
-  ): CodexSessionPolicyDecision {
-    if (event.agent !== "codex") return { action: "continue" };
+  ): CursorAgentSessionPolicyDecision {
+    if (event.agent !== "cursor-agent") return { action: "continue" };
 
     this.prune();
 
@@ -80,7 +96,7 @@ export class CodexSessionPolicy {
     const id = sessionId(event.raw);
     const pinnedCwd = this.resolveCwd(tokenName, id, event.raw);
 
-    if (sourceEvent === "UserPromptSubmit") {
+    if (sourceEvent === "beforeSubmitPrompt") {
       if (!id) {
         return { action: "suppress", reason: "missing_session", sourceEvent };
       }
@@ -94,13 +110,18 @@ export class CodexSessionPolicy {
       };
     }
 
-    if (sourceEvent === "Stop") {
+    if (sourceEvent === "stop") {
       if (!id) {
         return { action: "suppress", reason: "missing_session", sourceEvent };
       }
       const key = this.key(tokenName, id);
       const session = this.sessions.get(key);
       this.sessions.delete(key);
+      const status = stopStatus(event.raw);
+
+      if (status === "error" || status === "aborted") {
+        return { action: "continue", cwd: pinnedCwd };
+      }
 
       if (this.completionMinSeconds <= 0) {
         return {
@@ -133,10 +154,6 @@ export class CodexSessionPolicy {
       return { action: "continue", cwd: pinnedCwd };
     }
 
-    if (sourceEvent === "PostToolUseFailure" && id) {
-      this.sessions.delete(this.key(tokenName, id));
-    }
-
     return { action: "continue", cwd: pinnedCwd };
   }
 
@@ -158,7 +175,7 @@ export class CodexSessionPolicy {
     const existing = this.cwdBySession.get(key);
     if (existing) return existing.cwd;
 
-    const cwd = isRecord(raw) ? getString(raw.cwd) : undefined;
+    const cwd = resolveCwdValue(raw);
     if (cwd) {
       this.cwdBySession.set(key, { cwd, startedAtMs: this.nowMs() });
       this.enforceMaxCwdSessions();

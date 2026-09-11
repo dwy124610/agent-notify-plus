@@ -1,6 +1,5 @@
-// Codex hook adapter: forwards notification-worthy events to agent-notify server.
-// Configure Codex command hooks to run this file with node.
-// Required config: ~/.config/agent-notify/codex.json.
+// Grok Build hook adapter: forwards completion and abort events to agent-notify.
+// Required config: ~/.config/agent-notify/grok-build.json.
 
 import {
   appendFileSync,
@@ -13,61 +12,80 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const NOTIFY_EVENT_NAMES = new Set([
+const FORWARD_EVENT_NAMES = new Set([
   "UserPromptSubmit",
-  "PermissionRequest",
   "Stop",
-  "PostToolUseFailure",
+  "StopFailure",
+  "StopCancelled",
 ]);
+const DURATION_RE = /^(\d+)([smhd])$/;
+const DEFAULT_TIMEOUT_MS = 2000;
+const MAX_DISABLED_SESSIONS = 5;
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getHookEventName(raw) {
-  if (!isRecord(raw)) return undefined;
-  return typeof raw.hook_event_name === "string"
-    ? raw.hook_event_name
-    : undefined;
+function getString(value) {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function getSessionId(raw) {
+export function normalizeGrokBuildHookEvent(raw) {
   if (!isRecord(raw)) return undefined;
-  return typeof raw.session_id === "string" && raw.session_id.trim()
-    ? raw.session_id
-    : undefined;
+  const name = getString(raw.hook_event_name) ?? getString(raw.hookEventName);
+  if (!name) return undefined;
+  const aliases = {
+    userpromptsubmit: "UserPromptSubmit",
+    stop: "Stop",
+    stopfailure: "StopFailure",
+    stopcancelled: "StopCancelled",
+  };
+  return aliases[name.replace(/_/g, "").toLowerCase()] ?? name;
 }
 
-function getToolName(raw) {
+export function getGrokBuildSessionId(raw) {
   if (!isRecord(raw)) return undefined;
-  return typeof raw.tool_name === "string" && raw.tool_name.trim()
-    ? raw.tool_name
-    : undefined;
+  return getString(raw.session_id) ?? getString(raw.sessionId);
 }
 
-export function shouldForwardCodexEvent(raw, config = {}) {
-  const hookEventName = getHookEventName(raw);
-  if (hookEventName === "PermissionRequest") {
-    return config.notifyPermissionRequests === true;
+function getGrokBuildCwd(raw) {
+  if (!isRecord(raw)) return undefined;
+  return getString(raw.cwd) ?? getString(raw.workspaceRoot);
+}
+
+function getSubagentType(raw) {
+  if (!isRecord(raw)) return undefined;
+  return getString(raw.subagentType) ?? getString(raw.subagent_type);
+}
+
+function getStopReason(raw) {
+  if (!isRecord(raw)) return undefined;
+  return getString(raw.reason);
+}
+
+export function shouldForwardGrokBuildEvent(raw) {
+  const hookEventName = normalizeGrokBuildHookEvent(raw);
+  if (typeof hookEventName !== "string" || !FORWARD_EVENT_NAMES.has(hookEventName)) {
+    return false;
   }
-  if (hookEventName === "PostToolUseFailure") {
-    return isRecord(raw) && raw.is_interrupt === true;
+  if (getSubagentType(raw)) return false;
+  if (hookEventName === "Stop") {
+    const reason = getStopReason(raw);
+    if (reason && reason !== "end_turn") return false;
   }
-  return typeof hookEventName === "string" && NOTIFY_EVENT_NAMES.has(hookEventName);
+  return true;
 }
 
-export function summarizeCodexEventForDebug(raw) {
+export function summarizeGrokBuildEventForDebug(raw) {
   return {
-    hookEventName: getHookEventName(raw) ?? "unknown",
-    sessionId: getSessionId(raw),
-    toolName: getToolName(raw),
+    hookEventName: normalizeGrokBuildHookEvent(raw) ?? "unknown",
+    sessionId: getGrokBuildSessionId(raw),
     raw,
   };
 }
 
 function writeDebugLog(config, raw, forwarded, sent, extra = {}) {
   if (!config.debugLogPath) return;
-
   try {
     appendFileSync(
       config.debugLogPath,
@@ -76,15 +94,30 @@ function writeDebugLog(config, raw, forwarded, sent, extra = {}) {
         forwarded,
         sent,
         ...extra,
-        ...summarizeCodexEventForDebug(raw),
+        ...summarizeGrokBuildEventForDebug(raw),
       })}\n`,
     );
   } catch {
-    // Fail-safe: debug logging must never block Codex.
+    // Fail-safe.
   }
 }
 
-export async function sendCodexEvent(
+export function enrichGrokBuildRaw(raw) {
+  if (!isRecord(raw)) return raw;
+  const next = { ...raw };
+  const hookEventName = normalizeGrokBuildHookEvent(raw);
+  if (hookEventName) next.hook_event_name = hookEventName;
+  const sessionId = getGrokBuildSessionId(raw);
+  if (sessionId && !next.session_id) next.session_id = sessionId;
+  const cwd = getGrokBuildCwd(raw);
+  if (cwd && !next.cwd) next.cwd = cwd;
+  const last =
+    getString(next.last_assistant_message) ?? getString(next.lastAssistantMessage);
+  if (last) next.last_assistant_message = last;
+  return next;
+}
+
+export async function sendGrokBuildEvent(
   serverUrl,
   token,
   timeoutMs,
@@ -100,7 +133,7 @@ export async function sendCodexEvent(
         "content-type": "application/json",
         authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ agent: "codex", raw }),
+      body: JSON.stringify({ agent: "grok-build", raw }),
       signal: controller.signal,
     });
     return response.ok;
@@ -137,30 +170,17 @@ function readOptionalString(raw, key) {
   return value;
 }
 
-const DEFAULT_TIMEOUT_MS = 2000;
-const DURATION_RE = /^(\d+)([smhd])$/;
-const MAX_DISABLED_SESSIONS = 5;
-
 function emptySwitchState() {
-  return {
-    persistentDisabled: false,
-    disabledSessions: {},
-  };
+  return { persistentDisabled: false, disabledSessions: {} };
 }
 
 function withSwitchStateReadError(message) {
-  return {
-    ...emptySwitchState(),
-    readError: `state-read: ${message}`,
-  };
+  return { ...emptySwitchState(), readError: `state-read: ${message}` };
 }
 
 function readDisabledSessions(value) {
   if (value === undefined) return {};
-  if (!isRecord(value)) {
-    throw new Error("invalid disabledSessions");
-  }
-
+  if (!isRecord(value)) throw new Error("invalid disabledSessions");
   const disabledSessions = {};
   for (const [sessionId, sessionState] of Object.entries(value)) {
     if (!isRecord(sessionState) || typeof sessionState.disabledAt !== "string") {
@@ -174,32 +194,9 @@ function readDisabledSessions(value) {
 function trimDisabledSessions(disabledSessions) {
   return Object.fromEntries(
     Object.entries(disabledSessions)
-      .sort(([, left], [, right]) => {
-        const leftMs = Date.parse(left.disabledAt);
-        const rightMs = Date.parse(right.disabledAt);
-        return (
-          (Number.isFinite(rightMs) ? rightMs : 0) -
-          (Number.isFinite(leftMs) ? leftMs : 0)
-        );
-      })
+      .sort(([, left], [, right]) => Date.parse(right.disabledAt) - Date.parse(left.disabledAt))
       .slice(0, MAX_DISABLED_SESSIONS),
   );
-}
-
-function readOptionalBoolean(value, key) {
-  if (value === undefined) return undefined;
-  if (typeof value !== "boolean") {
-    throw new Error(`invalid ${key}`);
-  }
-  return value;
-}
-
-function readOptionalStateString(value, key) {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string") {
-    throw new Error(`invalid ${key}`);
-  }
-  return value;
 }
 
 function addDuration(now, amount, unit) {
@@ -209,8 +206,7 @@ function addDuration(now, amount, unit) {
 
 export function parseAgentNotifyCommand(prompt, now = new Date()) {
   if (typeof prompt !== "string") return { type: "none" };
-  const trimmed = prompt.trim();
-  const parts = trimmed.split(/\s+/);
+  const parts = prompt.trim().split(/\s+/);
   if (parts[0] !== "/agent-notify") return { type: "none" };
   const action = parts[1] ?? "status";
   const arg = parts[2];
@@ -227,102 +223,72 @@ export function parseAgentNotifyCommand(prompt, now = new Date()) {
   if (arg === "persist") return { type: "off-persist" };
   const match = arg.match(DURATION_RE);
   if (!match) {
-    return {
-      type: "invalid",
-      message: "Use a duration like 30m, 2h, or persist",
-    };
+    return { type: "invalid", message: "Use a duration like 30m, 2h, or persist" };
   }
   const amount = Number(match[1]);
   if (!Number.isSafeInteger(amount) || amount <= 0) {
     return { type: "invalid", message: "Duration must be positive" };
   }
-  return {
-    type: "off-until",
-    until: addDuration(now, amount, match[2]).toISOString(),
-  };
+  return { type: "off-until", until: addDuration(now, amount, match[2]).toISOString() };
 }
 
-export function getCodexSwitchStatePath(home = homedir()) {
-  return join(home, ".config", "agent-notify", "state", "codex.json");
+export function getGrokBuildSwitchStatePath(home = homedir()) {
+  return join(home, ".config", "agent-notify", "state", "grok-build.json");
 }
 
-export function readCodexSwitchState(statePath) {
+export function readGrokBuildSwitchState(statePath) {
   try {
     if (!existsSync(statePath)) return emptySwitchState();
     const raw = JSON.parse(readFileSync(statePath, "utf8"));
-    if (!isRecord(raw)) {
-      throw new Error("invalid state root");
-    }
+    if (!isRecord(raw)) throw new Error("invalid state root");
     return {
-      persistentDisabled:
-        readOptionalBoolean(raw.persistentDisabled, "persistentDisabled") ?? false,
-      temporaryDisabledUntil: readOptionalStateString(
-        raw.temporaryDisabledUntil,
-        "temporaryDisabledUntil",
-      ),
-      currentSessionId: readOptionalStateString(
-        raw.currentSessionId,
-        "currentSessionId",
-      ),
+      persistentDisabled: raw.persistentDisabled === true,
+      temporaryDisabledUntil:
+        typeof raw.temporaryDisabledUntil === "string"
+          ? raw.temporaryDisabledUntil
+          : undefined,
+      currentSessionId:
+        typeof raw.currentSessionId === "string" ? raw.currentSessionId : undefined,
       disabledSessions: readDisabledSessions(raw.disabledSessions),
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return withSwitchStateReadError(message);
+    return withSwitchStateReadError(error instanceof Error ? error.message : String(error));
   }
 }
 
-export function writeCodexSwitchState(statePath, state) {
+export function writeGrokBuildSwitchState(statePath, state) {
   mkdirSync(dirname(statePath), { recursive: true });
   writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
 }
 
-export function applyCodexSwitchCommand(
-  state,
-  command,
-  sessionId,
-  now = new Date(),
-) {
+export function applyGrokBuildSwitchCommand(state, command, sessionId, now = new Date()) {
   const next = {
     persistentDisabled: state.persistentDisabled === true,
     temporaryDisabledUntil: state.temporaryDisabledUntil,
     currentSessionId: state.currentSessionId,
-    disabledSessions: isRecord(state.disabledSessions)
-      ? { ...state.disabledSessions }
-      : {},
+    disabledSessions: isRecord(state.disabledSessions) ? { ...state.disabledSessions } : {},
   };
-
   if (command.type === "on") {
     next.persistentDisabled = false;
     delete next.temporaryDisabledUntil;
     if (sessionId) delete next.disabledSessions[sessionId];
-    return { state: next, message: "AgentNotify is on for Codex." };
+    return { state: next, message: "AgentNotify is on for Grok Build." };
   }
-
   if (command.type === "off-persist") {
     next.persistentDisabled = true;
-    return {
-      state: next,
-      message: "AgentNotify is persistently muted for Codex.",
-    };
+    return { state: next, message: "AgentNotify is persistently muted for Grok Build." };
   }
-
   if (command.type === "off-until") {
     next.temporaryDisabledUntil = command.until;
     return {
       state: next,
-      message: `AgentNotify is muted for Codex until ${command.until}.`,
+      message: `AgentNotify is muted for Grok Build until ${command.until}.`,
     };
   }
-
   if (command.type === "clear-sessions") {
     next.disabledSessions = {};
-    return {
-      state: next,
-      message: "AgentNotify session mutes are cleared for Codex.",
-    };
+    return { state: next, message: "AgentNotify session mutes are cleared for Grok Build." };
   }
-
   if (command.type === "off-session") {
     if (!sessionId) {
       return {
@@ -333,16 +299,12 @@ export function applyCodexSwitchCommand(
     }
     next.disabledSessions[sessionId] = { disabledAt: now.toISOString() };
     next.disabledSessions = trimDisabledSessions(next.disabledSessions);
-    return {
-      state: next,
-      message: "AgentNotify is muted for this Codex session.",
-    };
+    return { state: next, message: "AgentNotify is muted for this Grok Build session." };
   }
-
   return { state: next, message: command.message ?? "Invalid AgentNotify command." };
 }
 
-export function getCodexMuteReason(state, sessionId, now = new Date()) {
+export function getGrokBuildMuteReason(state, sessionId, now = new Date()) {
   if (state.persistentDisabled === true) return "persistent";
   if (typeof state.temporaryDisabledUntil === "string") {
     const untilMs = Date.parse(state.temporaryDisabledUntil);
@@ -354,36 +316,18 @@ export function getCodexMuteReason(state, sessionId, now = new Date()) {
   return undefined;
 }
 
-function getCodexStatusMessage(state, sessionId, now = new Date()) {
-  const muted = getCodexMuteReason(state, sessionId, now);
-  if (muted === "persistent") {
-    return "AgentNotify is persistently muted for Codex.";
-  }
-  if (muted === "timed") {
-    return `AgentNotify is muted for Codex until ${state.temporaryDisabledUntil}.`;
-  }
-  if (muted === "session") {
-    return "AgentNotify is muted for this Codex session.";
-  }
-  return "AgentNotify is on for Codex.";
-}
-
-export function parseCodexConfig(raw) {
+export function parseGrokBuildConfig(raw) {
   return {
     serverUrl: readRequiredString(raw, "serverUrl"),
     token: readRequiredString(raw, "token"),
     timeoutMs: readOptionalNumber(raw, "timeoutMs") ?? DEFAULT_TIMEOUT_MS,
-    notifyPermissionRequests:
-      readOptionalBoolean(raw.notifyPermissionRequests, "notifyPermissionRequests") ??
-      false,
     debugLogPath: readOptionalString(raw, "debugLogPath"),
   };
 }
 
 function readAgentNotifyConfig() {
-  const configPath = join(homedir(), ".config", "agent-notify", "codex.json");
-  const raw = JSON.parse(readFileSync(configPath, "utf8"));
-  return parseCodexConfig(raw);
+  const configPath = join(homedir(), ".config", "agent-notify", "grok-build.json");
+  return parseGrokBuildConfig(JSON.parse(readFileSync(configPath, "utf8")));
 }
 
 async function readStdin() {
@@ -399,13 +343,14 @@ function getPrompt(raw) {
   return typeof raw.prompt === "string" ? raw.prompt : undefined;
 }
 
-export async function handleCodexEvent(config, raw, deps = {}) {
+export async function handleGrokBuildEvent(config, raw, deps = {}) {
   const now = deps.now ?? new Date();
-  const statePath = deps.statePath ?? getCodexSwitchStatePath();
-  const readState = deps.readState ?? readCodexSwitchState;
-  const writeState = deps.writeState ?? writeCodexSwitchState;
+  const statePath = deps.statePath ?? getGrokBuildSwitchStatePath();
+  const readState = deps.readState ?? readGrokBuildSwitchState;
+  const writeState = deps.writeState ?? writeGrokBuildSwitchState;
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const sessionId = getSessionId(raw);
+  const hookEventName = normalizeGrokBuildHookEvent(raw);
+  const sessionId = getGrokBuildSessionId(raw);
   let state;
   let debug;
   try {
@@ -414,37 +359,23 @@ export async function handleCodexEvent(config, raw, deps = {}) {
       debug = { switchStateReadError: state.readError };
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
     state = emptySwitchState();
-    debug = { switchStateReadError: `state-read: ${message}` };
+    debug = {
+      switchStateReadError: `state-read: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
-  const command = parseAgentNotifyCommand(getPrompt(raw), now);
 
-  if (getHookEventName(raw) === "UserPromptSubmit" && command.type !== "none") {
+  const command = parseAgentNotifyCommand(getPrompt(raw), now);
+  if (hookEventName === "UserPromptSubmit" && command.type !== "none") {
     if (command.type === "status") {
-      const nextState = sessionId ? { ...state, currentSessionId: sessionId } : state;
-      if (sessionId && !debug) {
-        try {
-          writeState(statePath, nextState);
-        } catch {
-          return {
-            forwarded: false,
-            sent: false,
-            command: command.type,
-            error: "state-write",
-            ...(debug ? { debug } : {}),
-          };
-        }
-      }
       return {
         forwarded: false,
         sent: false,
         command: command.type,
-        message: getCodexStatusMessage(state, sessionId, now),
         ...(debug ? { debug } : {}),
       };
     }
-    const result = applyCodexSwitchCommand(state, command, sessionId, now);
+    const result = applyGrokBuildSwitchCommand(state, command, sessionId, now);
     if (command.type !== "invalid" && sessionId) {
       result.state.currentSessionId = sessionId;
     }
@@ -470,19 +401,19 @@ export async function handleCodexEvent(config, raw, deps = {}) {
     };
   }
 
-  const forwarded = shouldForwardCodexEvent(raw, config);
+  const forwarded = shouldForwardGrokBuildEvent(raw);
   if (!forwarded) return { forwarded: false, sent: false };
 
-  const muted = getCodexMuteReason(state, sessionId, now);
+  const muted = getGrokBuildMuteReason(state, sessionId, now);
   if (muted) {
     return { forwarded: true, sent: false, muted, ...(debug ? { debug } : {}) };
   }
 
-  const sent = await sendCodexEvent(
+  const sent = await sendGrokBuildEvent(
     config.serverUrl,
     config.token,
     config.timeoutMs,
-    raw,
+    enrichGrokBuildRaw(raw),
     fetchImpl,
   );
   return { forwarded: true, sent, ...(debug ? { debug } : {}) };
@@ -503,7 +434,7 @@ async function main() {
     return;
   }
 
-  const result = await handleCodexEvent(config, raw);
+  const result = await handleGrokBuildEvent(config, raw);
   writeDebugLog(config, raw, result.forwarded, result.sent, result.debug);
 }
 

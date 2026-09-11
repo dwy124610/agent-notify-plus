@@ -1,12 +1,12 @@
 # AgentNotify User Manual
 
-This manual is for anyone who wants phone or desktop notifications from OpenCode, Claude Code, or Codex. Follow the setup once, and your AI coding agent's key events get forwarded to AgentNotify, which pushes them to your device via Bark or ntfy.
+This manual is for anyone who wants phone or desktop notifications from OpenCode, Claude Code, Codex, or Cursor Agent. Follow the setup once, and your AI coding agent's key events get forwarded to AgentNotify, which pushes them to your device via Bark or ntfy.
 
 ## What this project does
 
 AgentNotify is a local notification relay:
 
-1. OpenCode, Claude Code, or Codex hits an event that needs your attention — a permission request, a question to choose, a long task finishing, or a session error.
+1. OpenCode, Claude Code, Codex, or Cursor Agent hits an event that needs your attention — a permission request, a question to choose, a long task finishing, or a session error.
 2. A local adapter forwards the event to the AgentNotify service on your machine.
 3. AgentNotify formats it into a short notification.
 4. AgentNotify calls the configured provider (Bark or ntfy) to push the notification to your phone or desktop.
@@ -17,7 +17,7 @@ The current version mainly supports these OpenCode events:
 - `permission.asked`: legacy permission request, same as above.
 - `question.asked`: pushes when you need to pick from options, reminding you to come back and choose.
 - `session.error`: pushes a failure notification on session errors.
-- `session.idle`: records session lifecycle, used for long-task completion notifications.
+- `session.idle`: pushes a completion notification after the long-task threshold; the body prefers the agent's last summary.
 
 In other words, it does not forward every step to you — only the events that need your attention.
 
@@ -25,18 +25,32 @@ Claude Code supports these hooks:
 
 - `UserPromptSubmit`: only records this turn's start time server-side; no phone notification.
 - `Notification`: pushes when Claude Code needs permission approval or an MCP interaction; plain `idle_prompt` is ignored by default.
-- `Stop`: pushes a completion notification after the task exceeds the server completion threshold (default `120` seconds).
+- `Stop`: pushes a completion notification after the task exceeds the server completion threshold (default `120` seconds). The body prefers `last_assistant_message`.
 - `StopFailure`: pushes on task failure or quota errors.
 
 Codex supports these hooks:
 
 - `UserPromptSubmit`: only records this turn's start time server-side; no phone notification.
 - `PermissionRequest`: Codex permission notifications, off by default; pushed only when `notifyPermissionRequests` is `true` in the adapter config.
-- `Stop`: pushes a completion notification after the task exceeds the server completion threshold (default `120` seconds).
+- `Stop`: pushes a completion notification after the task exceeds the server completion threshold (default `120` seconds). The body prefers `last_assistant_message`.
+- `PostToolUseFailure`: pushes a failure notification only when `is_interrupt` is true (user abort).
+
+Cursor Agent supports these hooks:
+
+- `beforeSubmitPrompt`: only records this turn's start time server-side; no phone notification.
+- `afterAgentResponse`: the adapter caches this turn's assistant summary; no phone notification.
+- `stop`: pushes completion after the threshold when `status=completed`; pushes failure immediately on `aborted` / `error`.
+
+Grok Build supports these hooks:
+
+- `UserPromptSubmit`: only records this turn's start time server-side; no phone notification.
+- `Stop`: pushes completion after the threshold when `reason=end_turn`. The body prefers `lastAssistantMessage`.
+- `StopFailure`: pushes immediately on API errors.
+- `StopCancelled`: pushes immediately on user interrupt (Ctrl+C and similar).
 
 ## Manual notification switch
 
-Each tool has its own AgentNotify switch. Turning notifications off in Codex does not turn them off in OpenCode or Claude Code.
+Each tool has its own AgentNotify switch. Turning notifications off in Codex does not turn them off in OpenCode, Claude Code, Cursor Agent, or Grok Build.
 
 Commands:
 
@@ -55,6 +69,7 @@ Switch state is stored in:
 ~/.config/agent-notify/state/codex.json
 ~/.config/agent-notify/state/claude-code.json
 ~/.config/agent-notify/state/opencode.json
+~/.config/agent-notify/state/cursor-agent.json
 ```
 
 Missing, malformed, or unreadable state files are treated as enabled so notifications keep flowing instead of getting blocked by a bad mute file.
@@ -124,7 +139,7 @@ Both providers are configured via `.env`, see Step 2. Only one `AGENT_NOTIFY_PRO
 
 - Node.js 20 or higher
 - pnpm
-- OpenCode / Claude Code / Codex (at least one)
+- OpenCode / Claude Code / Codex / Cursor Agent (at least one)
 - One notification provider:
   - Bark: install Bark on iPhone and get the endpoint (e.g. `https://api.day.app/your-device-key`)
   - ntfy: subscribe to a private topic in a phone or desktop ntfy client and get the topic URL
@@ -156,6 +171,8 @@ AGENT_NOTIFY_LANGUAGE=en
 AGENT_NOTIFY_CLAUDE_COMPLETION_MIN_SECONDS=120
 AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS=120
 AGENT_NOTIFY_OPENCODE_COMPLETION_MIN_SECONDS=120
+AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS=120
+AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS=120
 AGENT_NOTIFY_COOLDOWN_SECONDS=60
 BARK_ENDPOINT=https://api.day.app/example-device-key
 NTFY_ENDPOINT=
@@ -174,6 +191,8 @@ What you need to change:
 - `AGENT_NOTIFY_CLAUDE_COMPLETION_MIN_SECONDS`: Claude Code completion threshold in seconds, default `120`. After a task runs longer than this, a completion notification is pushed when it ends; set `0` to disable Claude Code completion notifications.
 - `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS`: Codex completion threshold in seconds, default `120`. Same behavior as above; set `0` to disable Codex completion notifications.
 - `AGENT_NOTIFY_OPENCODE_COMPLETION_MIN_SECONDS`: OpenCode completion threshold in seconds, default `120`. Same behavior as above; set `0` to disable OpenCode completion notifications.
+- `AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS`: Cursor Agent completion threshold in seconds, default `120`. Same behavior as above; set `0` to disable Cursor Agent completion notifications. Abnormal-termination notifications are not gated by this threshold.
+- `AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS`: Grok Build completion threshold in seconds, default `120`. Same behavior as above; set `0` to disable Grok Build completion notifications. Abnormal-termination notifications are not gated by this threshold.
 - `AGENT_NOTIFY_COOLDOWN_SECONDS`: interaction cooldown window in seconds, default `60`. The noise-reduction window for back-to-back permission/question notifications; set `0` to disable. See "Interaction cooldown (noise reduction)" above.
 
 Consider changing `dev-token-change-me` to a string only you know, e.g.:
@@ -182,7 +201,7 @@ Consider changing `dev-token-change-me` to a string only you know, e.g.:
 AGENT_NOTIFY_TOKENS=macbook:my-long-random-token
 ```
 
-When you configure the OpenCode / Claude Code / Codex plugins later, the `token` in each `json` config file must match this token — the part after the colon.
+When you configure the OpenCode / Claude Code / Codex / Cursor Agent plugins later, the `token` in each `json` config file must match this token — the part after the colon.
 
 ## Step 3: Start AgentNotify
 
@@ -228,7 +247,7 @@ If configured correctly, your phone should receive a test notification.
 
 ## Step 5: Connect your AI coding agent
 
-Once all three agents are connected, the new files look roughly like this:
+Once all four agents are connected, the new files look roughly like this:
 
 ```text
 ~/.config/
@@ -236,7 +255,9 @@ Once all three agents are connected, the new files look roughly like this:
 │   ├── claude-code.json               # Claude Code adapter config
 │   ├── claude-code-agent-notify.mjs   # Claude Code adapter file
 │   ├── codex.json                     # Codex adapter config
-│   └── codex-agent-notify.mjs         # Codex adapter file
+│   ├── codex-agent-notify.mjs         # Codex adapter file
+│   ├── cursor-agent.json              # Cursor Agent adapter config
+│   └── cursor-agent-notify.mjs        # Cursor Agent adapter file
 └── opencode/                          # OpenCode directory
     ├── agent-notify.json              # OpenCode plugin config
     ├── skills/
@@ -246,16 +267,19 @@ Once all three agents are connected, the new files look roughly like this:
         └── agent-notify.ts            # OpenCode plugin file
 ```
 
-Claude Code and Codex also get global skills:
+Claude Code, Codex, and Cursor Agent also get global skills:
 
 ```text
 ~/.claude/skills/agent-notify/SKILL.md
 ~/.codex/skills/agent-notify/SKILL.md
+~/.cursor/skills/agent-notify/SKILL.md
 ```
 
 Claude Code hooks live in its settings file (user-level `~/.claude/settings.json` or project-level `.claude/settings.json`).
 
 Codex hooks live in `~/.codex/hooks.json`.
+
+Cursor Agent hooks live in user-level `~/.cursor/hooks.json`.
 
 ## OpenCode setup
 
@@ -639,12 +663,23 @@ Merge the following into the user-level `~/.codex/hooks.json`. If you already ha
           }
         ]
       }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /ABS/PATH/.config/agent-notify/codex-agent-notify.mjs",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }
 ```
 
-On first install, or whenever the command path changes, Codex asks for authorization when it opens — choose review and trust this hook. Until trusted, Codex skips non-managed hooks.
+On first install, or whenever the command path changes, Codex asks for authorization when it opens — choose review and trust this hook. Until trusted, Codex skips non-managed hooks. `PostToolUseFailure` only pushes a failure notification when the user interrupts (`is_interrupt: true`); ordinary tool failures are not forwarded.
 
 ### 6. Verify Codex notifications
 
@@ -657,6 +692,101 @@ pnpm dev
 Run a task longer than `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS`. A completion notification fires when the task ends. Short tasks do not trigger completion notifications.
 
 If you set `notifyPermissionRequests` to `true`, lower Codex's permissions and trigger an action that needs approval, e.g. have it run a shell command that needs approval. You should then get a notification titled `Approve permission` or `需要批准`.
+
+## Connect Cursor Agent
+
+### 1. Confirm the AgentNotify server config
+
+```bash
+AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS=120
+```
+
+Completion notifications default to a `120` second threshold. Setting it to `0` only disables completion notifications; abnormal termination (`stop` with `aborted` / `error`) is still pushed.
+
+### 2. Install the Cursor Agent adapter
+
+```bash
+mkdir -p ~/.config/agent-notify
+cp examples/cursor-agent/cursor-agent.json ~/.config/agent-notify/cursor-agent.json
+cp examples/cursor-agent/cursor-agent-notify.mjs ~/.config/agent-notify/cursor-agent-notify.mjs
+```
+
+Change only `token` in `cursor-agent.json` to the part after the colon in the server `AGENT_NOTIFY_TOKENS`. Keep `serverUrl` at `http://127.0.0.1:8787`.
+
+Get the absolute adapter path:
+
+```bash
+printf '%s\n' "$HOME/.config/agent-notify/cursor-agent-notify.mjs"
+```
+
+### 3. Install the Cursor Agent skill
+
+```bash
+mkdir -p ~/.cursor/skills/agent-notify
+cp examples/cursor-agent/skills/agent-notify/SKILL.md ~/.cursor/skills/agent-notify/SKILL.md
+```
+
+### 4. Configure Cursor Agent hooks
+
+Merge the following into user-level `~/.cursor/hooks.json`. If Orca or other hooks already exist, append these commands; do not overwrite the whole file. User-level hooks run with cwd `~/.cursor/`, but the adapter should use an absolute path.
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "node /ABS/PATH/.config/agent-notify/cursor-agent-notify.mjs",
+        "timeout": 5
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "node /ABS/PATH/.config/agent-notify/cursor-agent-notify.mjs",
+        "timeout": 5
+      }
+    ],
+    "stop": [
+      {
+        "command": "node /ABS/PATH/.config/agent-notify/cursor-agent-notify.mjs",
+        "timeout": 5
+      }
+    ]
+  }
+}
+```
+
+What these three hooks do:
+
+- `beforeSubmitPrompt`: records this turn's start time; sends no notification.
+- `afterAgentResponse`: caches this turn's assistant summary for the completion notification. Cursor CLI may not currently fire this hook; completion then falls back to the default body.
+- `stop`: sends a completion notification after the threshold on a normal finish; sends a failure notification immediately on `aborted` / `error`.
+
+### 5. Verify Cursor Agent notifications
+
+Keep AgentNotify running and have Cursor Agent run a task longer than the threshold. You should get a completion notification whose body is this turn's summary. Abnormal termination (abort or error) should push a failure notification immediately.
+
+## Connect Grok Build
+
+Grok Build global hooks live in `~/.grok/hooks/` and are always trusted; `/hooks-trust` is not required.
+
+```bash
+mkdir -p ~/.config/agent-notify ~/.grok/hooks ~/.grok/skills/agent-notify
+cp examples/grok-build/grok-build.json ~/.config/agent-notify/grok-build.json
+cp examples/grok-build/grok-build-agent-notify.mjs ~/.config/agent-notify/grok-build-agent-notify.mjs
+cp examples/grok-build/skills/agent-notify/SKILL.md ~/.grok/skills/agent-notify/SKILL.md
+```
+
+Change only `token` in `grok-build.json`. Copy the hook file and replace `/ABS/PATH/...` with the absolute adapter path, using the absolute `node` binary:
+
+```bash
+printf '%s\n' "$HOME/.config/agent-notify/grok-build-agent-notify.mjs"
+cp examples/grok-build/grok-hooks.json ~/.grok/hooks/agent-notify.json
+```
+
+An existing Grok session does not need a restart: open `/hooks` and press `r` to reload from disk.
+
+`Stop` forwards only genuine `reason=end_turn` completions. Session-end Stop fires are ignored. `StopFailure` and `StopCancelled` push a failure notification immediately.
 
 ## Common commands
 
@@ -720,6 +850,8 @@ docker compose -f deploy/docker/docker-compose.yml up --build
 | `AGENT_NOTIFY_CLAUDE_COMPLETION_MIN_SECONDS` | no | `120` | Claude Code completion threshold, `0` disables |
 | `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS` | no | `120` | Codex completion threshold, `0` disables |
 | `AGENT_NOTIFY_OPENCODE_COMPLETION_MIN_SECONDS` | no | `120` | OpenCode completion threshold, `0` disables |
+| `AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS` | no | `120` | Cursor Agent completion threshold, `0` disables |
+| `AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS` | no | `120` | Grok Build completion threshold, `0` disables |
 | `AGENT_NOTIFY_LOG_RAW` | no | `false` | whether to log raw payloads; turn on temporarily for debugging |
 
 These are fixed in `docker-compose.yml` and usually don't need changing:
@@ -728,6 +860,7 @@ These are fixed in `docker-compose.yml` and usually don't need changing:
 - `AGENT_NOTIFY_LOG_PATH=/data/events.jsonl`: logs go to the mounted volume.
 - Port mapping `8787:8787`: host `8787` → container `8787`; change the left number on host port conflicts.
 - Volume `agent-notify-data:/data`: persists logs; only `docker compose down -v` removes it.
+- `restart: unless-stopped`: the container comes back after a crash or when Docker / OrbStack starts at login. A manual `docker compose stop` does not auto-restart it.
 
 With ntfy:
 
@@ -854,7 +987,9 @@ Completion notifications are on by default, threshold 120 seconds. When missing,
 
 - **OpenCode**: the threshold is the server `AGENT_NOTIFY_OPENCODE_COMPLETION_MIN_SECONDS` (default `120`). The time from session `busy` to `idle` must reach the threshold to push. Short tasks not pushing is expected. To verify, temporarily set `AGENT_NOTIFY_OPENCODE_COMPLETION_MIN_SECONDS` to `5` in the server `.env` and run a task longer than 5 seconds. If a turn already errored (`session.error`), a later `idle` won't push a completion notification.
 - **Claude Code**: the threshold is the server `AGENT_NOTIFY_CLAUDE_COMPLETION_MIN_SECONDS` (default `120`). `UserPromptSubmit` must record the start time first for `Stop` to judge; if the `UserPromptSubmit` hook isn't configured or didn't fire, `Stop` has no start time and won't push a completion notification. Confirm all four hooks are configured. `StopFailure` clears the turn's state and sends a failure notification instead of a completion notification.
-- **Codex**: the threshold is the server `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS` (default `120`). It also relies on `UserPromptSubmit` recording the start time; confirm all three hooks are configured and Codex `/hooks` is trusted.
+- **Codex**: the threshold is the server `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS` (default `120`). It also relies on `UserPromptSubmit` recording the start time; confirm `UserPromptSubmit`, `Stop`, and `PostToolUseFailure` are configured and Codex `/hooks` is trusted. User interrupts go through `PostToolUseFailure` (`is_interrupt: true`) and are not gated by the completion threshold.
+- **Cursor Agent**: the threshold is the server `AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS` (default `120`). `beforeSubmitPrompt` must record the start time first for a completed `stop` to judge. `aborted` / `error` send a failure notification immediately. Confirm the three hooks in `~/.cursor/hooks.json` point at the adapter.
+- **Grok Build**: the threshold is the server `AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS` (default `120`). `UserPromptSubmit` must record the start time first. `StopCancelled` / `StopFailure` send a failure notification immediately. Global hooks live in `~/.grok/hooks/agent-notify.json`; reload an existing session with `/hooks` then `r`.
 
 Tip: temporarily set the threshold to `5` and run a task clearly longer than 5 seconds — much faster than waiting 120. Change it back to `120` afterwards.
 

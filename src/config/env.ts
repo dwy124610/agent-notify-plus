@@ -48,6 +48,8 @@ interface BaseAppConfig {
   claudeCompletionMinSeconds: number;
   codexCompletionMinSeconds: number;
   opencodeCompletionMinSeconds: number;
+  cursorCompletionMinSeconds: number;
+  grokCompletionMinSeconds: number;
   cooldownSeconds: number;
 }
 
@@ -126,6 +128,14 @@ const envSchema = z
       .number()
       .nonnegative()
       .default(120),
+    AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS: z.coerce
+      .number()
+      .nonnegative()
+      .default(120),
+    AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS: z.coerce
+      .number()
+      .nonnegative()
+      .default(120),
     AGENT_NOTIFY_COOLDOWN_SECONDS: z.coerce
       .number()
       .nonnegative()
@@ -166,6 +176,10 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
       parsed.AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS,
     opencodeCompletionMinSeconds:
       parsed.AGENT_NOTIFY_OPENCODE_COMPLETION_MIN_SECONDS,
+    cursorCompletionMinSeconds:
+      parsed.AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS,
+    grokCompletionMinSeconds:
+      parsed.AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS,
     cooldownSeconds: parsed.AGENT_NOTIFY_COOLDOWN_SECONDS,
   };
 

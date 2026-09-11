@@ -14,12 +14,13 @@
 </div>
 
 
-AgentNotify 接收 OpenCode、Claude Code 和 Codex 的 hook 事件，在服务端格式化成简短、行动导向的通知，记录安全的事件摘要，并通过 Bark 或 ntfy 推送到你的手机或桌面。
+AgentNotify 接收 OpenCode、Claude Code、Codex、Cursor Agent 和 Grok Build 的 hook 事件，在服务端格式化成简短、行动导向的通知，记录安全的事件摘要，并通过 Bark 或 ntfy 推送到你的手机或桌面。
 
 ## 它能做什么
 
-- 接收 OpenCode、Claude Code 和 Codex 的原始 hook 事件。
+- 接收 OpenCode、Claude Code、Codex、Cursor Agent 和 Grok Build 的原始 hook 事件。
 - 在服务端格式化简短、行动导向的通知（权限请求、提问、错误、长任务完成）。
+- 完成和失败通知会带上 agent 最后的总结。
 - 让短任务保持安静，只在会话运行时间足够长时提醒你。
 - 用会话级冷却压住高频「通知-处理-继续」循环，减少权限/问题提醒刷屏。
 - 提供按工具独立的 `/agent-notify` 开关，支持当前会话、定时和持久静音。
@@ -31,7 +32,9 @@ AgentNotify 接收 OpenCode、Claude Code 和 Codex 的 hook 事件，在服务�
 | --- | --- | --- |
 | OpenCode | plugin 示例 | permission / question / session-error / idle-completion 事件 |
 | Claude Code | command hook + adapter | `UserPromptSubmit`、选定的 `Notification`、`Stop`、`StopFailure` |
-| Codex | command hook + adapter | `UserPromptSubmit`、`Stop`，可选 `PermissionRequest` |
+| Codex | command hook + adapter | `UserPromptSubmit`、`Stop`、中断时的 `PostToolUseFailure`，可选 `PermissionRequest` |
+| Cursor Agent | command hook + adapter | `beforeSubmitPrompt`、`afterAgentResponse`（缓存总结）、`stop` |
+| Grok Build | command hook + adapter | `UserPromptSubmit`、`Stop`、`StopFailure`、`StopCancelled` |
 
 Adapter 是 fail-safe 的：服务端错误不会阻塞 agent。长任务完成状态由 AgentNotify 服务端跟踪，因此 adapter 保持无状态。
 

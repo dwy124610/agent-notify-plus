@@ -192,6 +192,63 @@ export function shouldNotify(raw: unknown): boolean {
   return type === "session.status" && getStatusType(raw) === "busy";
 }
 
+export function extractLastAssistantMessage(messages: unknown): string | undefined {
+  const rows = Array.isArray(messages)
+    ? messages
+    : isRecord(messages) && Array.isArray(messages.data)
+      ? messages.data
+      : [];
+
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index];
+    if (!isRecord(row)) continue;
+    const info = isRecord(row.info) ? row.info : row;
+    if (info.role !== "assistant") continue;
+    const parts = Array.isArray(row.parts) ? row.parts : [];
+    const texts = parts
+      .filter(
+        (part): part is Record<string, unknown> & { text: string } =>
+          isRecord(part) &&
+          part.type === "text" &&
+          part.ignored !== true &&
+          typeof part.text === "string",
+      )
+      .map((part) => part.text.trim())
+      .filter(Boolean);
+    if (texts.length > 0) return texts.join("\n");
+  }
+
+  return undefined;
+}
+
+async function withLastAssistantMessage(
+  raw: unknown,
+  client?: {
+    session?: {
+      messages?: (args: unknown) => Promise<unknown>;
+    };
+  },
+): Promise<unknown> {
+  const type = getEventType(raw);
+  if (type !== "session.idle" && type !== "session.error") return raw;
+  const sessionID = getOpenCodeSessionId(raw);
+  if (!sessionID || !client?.session?.messages || !isRecord(raw)) return raw;
+
+  try {
+    const result = await Promise.race([
+      client.session.messages({ path: { id: sessionID } }),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("timeout")), 1_500);
+      }),
+    ]);
+    const text = extractLastAssistantMessage(result);
+    if (!text) return raw;
+    return { ...raw, last_assistant_message: text };
+  } catch {
+    return raw;
+  }
+}
+
 export function summarizeOpenCodeEventForDebug(raw: unknown): Record<string, unknown> {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { type: "unknown" };
@@ -493,6 +550,11 @@ export async function notify(
     now?: Date;
     statePath?: string;
     readState?: typeof readOpenCodeSwitchState;
+    client?: {
+      session?: {
+        messages?: (args: unknown) => Promise<unknown>;
+      };
+    };
   } = {},
 ): Promise<{ forwarded: boolean; sent: boolean; muted?: string }> {
   const rawWithCwd = addOpenCodeCwd(raw, directory);
@@ -523,14 +585,15 @@ export async function notify(
     return { forwarded: true, sent: false, muted, ...(debug ? { debug } : {}) };
   }
 
+  const payload = await withLastAssistantMessage(rawWithCwd, deps.client);
   const sent = await sendOpenCodeEvent(
     config.serverUrl,
     config.token,
     config.timeoutMs,
-    rawWithCwd,
+    payload,
     deps.fetchImpl ?? fetch,
   );
-  writeDebugLog(config, rawWithCwd, forwarded, sent, debug);
+  writeDebugLog(config, payload, forwarded, sent, debug);
   return { forwarded, sent, ...(debug ? { debug } : {}) };
 }
 
@@ -539,8 +602,14 @@ export async function notify(
 // See https://opencode.ai/docs/plugins/ for the plugin API.
 export const AgentNotifyPlugin = async ({
   directory,
+  client,
 }: {
   directory: string;
+  client?: {
+    session?: {
+      messages?: (args: unknown) => Promise<unknown>;
+    };
+  };
 }) => {
   const config = readAgentNotifyConfig();
 
@@ -565,7 +634,7 @@ export const AgentNotifyPlugin = async ({
       return handleOpenCodeCommand(config, input, output);
     },
     event: async ({ event }: { event: { type: string; [key: string]: unknown } }) => {
-      await notify(config, event, directory);
+      await notify(config, event, directory, { client });
     },
   };
 };

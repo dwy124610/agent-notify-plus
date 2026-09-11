@@ -158,6 +158,58 @@ describe("config parsing", () => {
     expect(config.opencodeCompletionMinSeconds).toBe(120);
   });
 
+  it("defaults Cursor Agent completion threshold to 120", () => {
+    const config = parseConfig({
+      AGENT_NOTIFY_TOKENS: "macbook:abc",
+      BARK_ENDPOINT: "https://api.day.app/key",
+    });
+
+    expect(config.cursorCompletionMinSeconds).toBe(120);
+  });
+
+  it("parses Cursor Agent completion threshold", () => {
+    const config = parseConfig({
+      AGENT_NOTIFY_TOKENS: "macbook:abc",
+      BARK_ENDPOINT: "https://api.day.app/key",
+      AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS: "5",
+    });
+
+    expect(config.cursorCompletionMinSeconds).toBe(5);
+  });
+
+  it("defaults Grok Build completion threshold to 120", () => {
+    const config = parseConfig({
+      AGENT_NOTIFY_TOKENS: "macbook:abc",
+      BARK_ENDPOINT: "https://api.day.app/key",
+    });
+
+    expect(config.grokCompletionMinSeconds).toBe(120);
+  });
+
+  it("passes Grok Build completion threshold through Docker compose", () => {
+    const contents = readFileSync("deploy/docker/docker-compose.yml", "utf8");
+
+    expect(contents).toContain("AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS");
+  });
+
+  it("documents Grok Build completion threshold in the env example", () => {
+    const contents = readFileSync(".env.example", "utf8");
+
+    expect(contents).toContain("AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS=");
+  });
+
+  it("documents Cursor Agent completion threshold in the env example", () => {
+    const contents = readFileSync(".env.example", "utf8");
+
+    expect(contents).toContain("AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS=");
+  });
+
+  it("passes Cursor Agent completion threshold through Docker compose", () => {
+    const contents = readFileSync("deploy/docker/docker-compose.yml", "utf8");
+
+    expect(contents).toContain("AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS");
+  });
+
   it("rejects negative OpenCode completion threshold", () => {
     expect(() =>
       parseConfig({

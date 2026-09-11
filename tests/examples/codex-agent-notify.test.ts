@@ -60,6 +60,18 @@ describe("Codex adapter example", () => {
     ).toBe(true);
     expect(
       adapter.shouldForwardCodexEvent({
+        hook_event_name: "PostToolUseFailure",
+        is_interrupt: true,
+      }),
+    ).toBe(true);
+    expect(
+      adapter.shouldForwardCodexEvent({
+        hook_event_name: "PostToolUseFailure",
+        is_interrupt: false,
+      }),
+    ).toBe(false);
+    expect(
+      adapter.shouldForwardCodexEvent({
         hook_event_name: "PostToolUse",
       }),
     ).toBe(false);

@@ -5,6 +5,8 @@ import {
   type FormatterOptions,
 } from "./claude-code.js";
 import { formatCodexEvent } from "./codex.js";
+import { formatCursorAgentEvent } from "./cursor-agent.js";
+import { formatGrokBuildEvent } from "./grok-build.js";
 import { formatOpenCodeEvent } from "./opencode.js";
 
 export function formatIncomingEvent(
@@ -16,6 +18,12 @@ export function formatIncomingEvent(
   }
   if (event.agent === "codex") {
     return formatCodexEvent(event, options);
+  }
+  if (event.agent === "cursor-agent") {
+    return formatCursorAgentEvent(event, options);
+  }
+  if (event.agent === "grok-build") {
+    return formatGrokBuildEvent(event, options);
   }
   return formatOpenCodeEvent(event, options);
 }

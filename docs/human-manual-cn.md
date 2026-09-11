@@ -1,12 +1,12 @@
 # AgentNotify 人类使用手册
 
-这份手册写给想给 OpenCode、Claude Code、Codex 接上手机或桌面通知的人。照着配置一遍，就能把关键事件转发到 AgentNotify，再由 Bark 或 ntfy 推到你的设备。
+这份手册写给想给 OpenCode、Claude Code、Codex、Cursor Agent 接上手机或桌面通知的人。照着配置一遍，就能把关键事件转发到 AgentNotify，再由 Bark 或 ntfy 推到你的设备。
 
 ## 这个项目是做什么的
 
 AgentNotify 是一个本地通知中转站：
 
-1. OpenCode、Claude Code 或 Codex 运行到需要你处理的事件，例如请求命令权限、问题选择、长任务完成或会话报错。
+1. OpenCode、Claude Code、Codex 或 Cursor Agent 运行到需要你处理的事件，例如请求命令权限、问题选择、长任务完成或会话报错。
 2. 本地 adapter 把事件发到本机的 AgentNotify 服务。
 3. AgentNotify 把事件格式化成简短通知。
 4. AgentNotify 调用配置的 provider（Bark 或 ntfy），把通知推到你的手机或桌面设备。
@@ -17,7 +17,7 @@ AgentNotify 是一个本地通知中转站：
 - `permission.asked`：旧版权限请求，同上，推送权限通知
 - `question.asked`：需要你在几个选项里做选择时推送，提醒你回来做选择
 - `session.error`：会话报错时推送失败通知
-- `session.idle`：记录会话生命周期，用于长任务才提醒功能用
+- `session.idle`：长任务达到完成阈值后推送完成通知，正文优先用 agent 最后总结
 
 也就是说，它不会把 OpenCode 的每一步都推给你，只会推需要你注意的事件。
 
@@ -25,18 +25,32 @@ Claude Code 侧支持这些 hooks：
 
 - `UserPromptSubmit`：只用于服务端记录本轮开始时间，不推送手机通知，
 - `Notification`：Claude Code 需要权限批准或处理 MCP 交互时推送；普通 `idle_prompt` 默认忽略
-- `Stop`：长任务达到服务端完成阈值（默认 `120` 秒）后推送完成通知
+- `Stop`：长任务达到服务端完成阈值（默认 `120` 秒）后推送完成通知，正文优先用 `last_assistant_message`
 - `StopFailure`：任务失败或限额错误时推送
 
 Codex 侧支持这些 hooks：
 
 - `UserPromptSubmit`：只用于服务端记录本轮开始时间，不推送手机通知
 - `PermissionRequest`：Codex 权限通知，默认不推送；在 adapter 配置里把 `notifyPermissionRequests` 设为 `true` 后才推送
-- `Stop`：长任务达到服务端完成阈值（默认 `120` 秒）后推送完成通知
+- `Stop`：长任务达到服务端完成阈值（默认 `120` 秒）后推送完成通知，正文优先用 `last_assistant_message`
+- `PostToolUseFailure`：仅当 `is_interrupt` 为 true（用户中断）时推送失败通知
+
+Cursor Agent 侧支持这些 hooks：
+
+- `beforeSubmitPrompt`：只用于服务端记录本轮开始时间，不推送手机通知
+- `afterAgentResponse`：adapter 缓存本轮 assistant 总结，不推送手机通知
+- `stop`：`status=completed` 且达到完成阈值后推送完成通知；`aborted` / `error` 立即推送失败通知
+
+Grok Build 侧支持这些 hooks：
+
+- `UserPromptSubmit`：只用于服务端记录本轮开始时间，不推送手机通知
+- `Stop`：`reason=end_turn` 且达到完成阈值后推送完成通知，正文优先用 `lastAssistantMessage`
+- `StopFailure`：API 错误时立即推送失败通知
+- `StopCancelled`：用户中断（Ctrl+C 等）时立即推送失败通知
 
 ## 手动通知开关
 
-每个工具都有自己的 AgentNotify 开关。在 Codex 里关闭通知，不会影响 OpenCode 或 Claude Code。
+每个工具都有自己的 AgentNotify 开关。在 Codex 里关闭通知，不会影响 OpenCode、Claude Code、Cursor Agent 或 Grok Build。
 
 命令：
 
@@ -55,6 +69,7 @@ adapter/plugin 负责识别有效命令并写入状态文件；对应的 `agent-
 ~/.config/agent-notify/state/codex.json
 ~/.config/agent-notify/state/claude-code.json
 ~/.config/agent-notify/state/opencode.json
+~/.config/agent-notify/state/cursor-agent.json
 ```
 
 状态文件不存在、malformed 或 unreadable 时会按“已开启通知”处理，避免这类静音文件永久阻断通知。
@@ -124,7 +139,7 @@ Bark 只能推到苹果设备。如果你用 Android、Windows、Linux 或想在
 
 - Node.js 20 或更高版本
 - pnpm
-- OpenCode / Claude Code / Codex（至少一个）
+- OpenCode / Claude Code / Codex / Cursor Agent（至少一个）
 - 通知 provider 二选一：
   - Bark：iPhone 上安装 Bark，拿到 endpoint（形如 `https://api.day.app/你的设备Key`）
   - ntfy：在手机或桌面 ntfy 客户端订阅一个专属自己的 topic，拿到 topic URL
@@ -156,6 +171,8 @@ AGENT_NOTIFY_LANGUAGE=en
 AGENT_NOTIFY_CLAUDE_COMPLETION_MIN_SECONDS=120
 AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS=120
 AGENT_NOTIFY_OPENCODE_COMPLETION_MIN_SECONDS=120
+AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS=120
+AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS=120
 AGENT_NOTIFY_COOLDOWN_SECONDS=60
 BARK_ENDPOINT=https://api.day.app/example-device-key
 NTFY_ENDPOINT=
@@ -174,6 +191,8 @@ AGENT_NOTIFY_LOG_RAW=false
 - `AGENT_NOTIFY_CLAUDE_COMPLETION_MIN_SECONDS`：Claude Code 完成通知阈值，单位秒，默认 `120`。任务运行超过该秒数后，结束时推送完成通知；设为 `0` 关闭 Claude Code 完成通知。
 - `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS`：Codex 完成通知阈值，单位秒，默认 `120`。任务运行超过该秒数后，结束时推送完成通知；设为 `0` 关闭 Codex 完成通知。
 - `AGENT_NOTIFY_OPENCODE_COMPLETION_MIN_SECONDS`：OpenCode 完成通知阈值，单位秒，默认 `120`。任务运行超过该秒数后，结束时推送完成通知；设为 `0` 关闭 OpenCode 完成通知。
+- `AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS`：Cursor Agent 完成通知阈值，单位秒，默认 `120`。任务运行超过该秒数后，结束时推送完成通知；设为 `0` 关闭 Cursor Agent 完成通知。异常终止通知不受此阈值影响。
+- `AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS`：Grok Build 完成通知阈值，单位秒，默认 `120`。任务运行超过该秒数后，结束时推送完成通知；设为 `0` 关闭 Grok Build 完成通知。异常终止通知不受此阈值影响。
 - `AGENT_NOTIFY_COOLDOWN_SECONDS`：交互冷却窗口，单位秒，默认 `60`。连续权限/问答通知的冷却降噪窗口，设为 `0` 关闭。详见上文「交互冷却降噪」。
 
 建议把 `dev-token-change-me` 改成只有你知道的字符串。例如：
@@ -228,7 +247,7 @@ pnpm agent-notify test
 
 ## 第五步：接入你的 AI coding agent
 
-三个 agent 全部接入后，新增的文件大致如下：
+四个 agent 全部接入后，新增的文件大致如下：
 
 ```text
 ~/.config/
@@ -236,7 +255,9 @@ pnpm agent-notify test
 │   ├── claude-code.json               # Claude Code adapter 配置
 │   ├── claude-code-agent-notify.mjs   # Claude Code adapter 文件
 │   ├── codex.json                     # Codex adapter 配置
-│   └── codex-agent-notify.mjs         # Codex adapter 文件
+│   ├── codex-agent-notify.mjs         # Codex adapter 文件
+│   ├── cursor-agent.json              # Cursor Agent adapter 配置
+│   └── cursor-agent-notify.mjs        # Cursor Agent adapter 文件
 └── opencode/                          # OpenCode 目录
     ├── agent-notify.json              # OpenCode 插件配置
     ├── skills/
@@ -246,16 +267,19 @@ pnpm agent-notify test
         └── agent-notify.ts            # OpenCode 插件文件
 ```
 
-另外还会给 Claude Code 和 Codex 安装全局 skill：
+另外还会给 Claude Code、Codex 和 Cursor Agent 安装全局 skill：
 
 ```text
 ~/.claude/skills/agent-notify/SKILL.md
 ~/.codex/skills/agent-notify/SKILL.md
+~/.cursor/skills/agent-notify/SKILL.md
 ```
 
 Claude Code 的 hooks 写在其配置文件中（用户级 `~/.claude/settings.json` 或项目级 `.claude/settings.json`）
 
 Codex 的 hooks 写在 `~/.codex/hooks.json`
+
+Cursor Agent 的 hooks 写在用户级 `~/.cursor/hooks.json`
 
 ## OpenCode 接入
 
@@ -641,12 +665,23 @@ hook 负责识别 `/agent-notify` 命令并写入状态文件；skill 负责让 
           }
         ]
       }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /ABS/PATH/.config/agent-notify/codex-agent-notify.mjs",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }
 ```
 
-首次安装或 command 路径变化后，打开 Codex 时会请求授权，选择 review 并 trust 这条 hook。未 trust 前，Codex 会跳过非 managed hook。
+首次安装或 command 路径变化后，打开 Codex 时会请求授权，选择 review 并 trust 这条 hook。未 trust 前，Codex 会跳过非 managed hook。`PostToolUseFailure` 只在用户中断（`is_interrupt: true`）时推送失败通知，普通工具失败不会推送。
 
 ### 6. 实际验证 Codex 通知
 
@@ -659,6 +694,101 @@ pnpm dev
 运行一次超过 `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS` 的任务。任务结束后会触发完成通知。短任务不会触发完成通知。
 
 如果你把 `notifyPermissionRequests` 设为 `true`，再调低 Codex 的权限并触发一次需要审批的操作，例如让它运行需要审批的 shell 命令。此时你应该收到标题为 `Approve permission` 或 `需要批准` 的通知。
+
+## Cursor Agent 接入
+
+### 1. 确认 AgentNotify 服务端配置
+
+```bash
+AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS=120
+```
+
+完成通知默认阈值 `120` 秒。设为 `0` 只关闭完成通知，异常终止（`stop` 的 `aborted` / `error`）仍会推送。
+
+### 2. 安装 Cursor Agent adapter
+
+```bash
+mkdir -p ~/.config/agent-notify
+cp examples/cursor-agent/cursor-agent.json ~/.config/agent-notify/cursor-agent.json
+cp examples/cursor-agent/cursor-agent-notify.mjs ~/.config/agent-notify/cursor-agent-notify.mjs
+```
+
+把 `cursor-agent.json` 里的 `token` 改成服务端 `AGENT_NOTIFY_TOKENS` 冒号后面的部分。`serverUrl` 保持 `http://127.0.0.1:8787`。
+
+查看绝对路径：
+
+```bash
+printf '%s\n' "$HOME/.config/agent-notify/cursor-agent-notify.mjs"
+```
+
+### 3. 安装 Cursor Agent skill
+
+```bash
+mkdir -p ~/.cursor/skills/agent-notify
+cp examples/cursor-agent/skills/agent-notify/SKILL.md ~/.cursor/skills/agent-notify/SKILL.md
+```
+
+### 4. 配置 Cursor Agent hooks
+
+把下面内容合并进用户级 `~/.cursor/hooks.json`。如果已有 Orca 或其他 hooks，只追加这些 command，不要覆盖整个文件。用户级 hooks 的工作目录是 `~/.cursor/`，但 adapter 建议用绝对路径。
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "node /ABS/PATH/.config/agent-notify/cursor-agent-notify.mjs",
+        "timeout": 5
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "node /ABS/PATH/.config/agent-notify/cursor-agent-notify.mjs",
+        "timeout": 5
+      }
+    ],
+    "stop": [
+      {
+        "command": "node /ABS/PATH/.config/agent-notify/cursor-agent-notify.mjs",
+        "timeout": 5
+      }
+    ]
+  }
+}
+```
+
+这三个 hooks 的作用是：
+
+- `beforeSubmitPrompt`：记录本轮开始时间，不发通知。
+- `afterAgentResponse`：缓存本轮 assistant 总结，供完成通知使用。Cursor CLI 当前可能不触发该 hook，那时完成通知会回退到默认文案。
+- `stop`：正常结束且超过阈值时发完成通知；`aborted` / `error` 立即发失败通知。
+
+### 5. 验证 Cursor Agent 通知
+
+保持 AgentNotify 服务运行，让 Cursor Agent 跑一个超过阈值的任务。任务结束时应收到完成通知，正文是本轮总结。异常终止（中断或报错）应立即收到失败通知。
+
+## Grok Build 接入
+
+Grok Build 的全局 hook 在 `~/.grok/hooks/`，始终可信，不需要 `/hooks-trust`。
+
+```bash
+mkdir -p ~/.config/agent-notify ~/.grok/hooks ~/.grok/skills/agent-notify
+cp examples/grok-build/grok-build.json ~/.config/agent-notify/grok-build.json
+cp examples/grok-build/grok-build-agent-notify.mjs ~/.config/agent-notify/grok-build-agent-notify.mjs
+cp examples/grok-build/skills/agent-notify/SKILL.md ~/.grok/skills/agent-notify/SKILL.md
+```
+
+把 `grok-build.json` 的 `token` 改成服务端冒号后面的部分。复制 hook 文件时把 command 换成 adapter 的绝对路径：
+
+```bash
+printf '%s\n' "$HOME/.config/agent-notify/grok-build-agent-notify.mjs"
+cp examples/grok-build/grok-hooks.json ~/.grok/hooks/agent-notify.json
+```
+
+把 `~/.grok/hooks/agent-notify.json` 里的 `/ABS/PATH/...` 换成上面输出的路径，并用本机 `node` 的绝对路径。现有会话不用重启：`/hooks` 打开后按 `r` 从磁盘重载。
+
+`Stop` 只转发 `reason=end_turn` 的真正完成；会话结束那次 Stop 不会推完成通知。`StopFailure` 和 `StopCancelled` 立即推失败通知。
 
 ## 常用命令
 
@@ -722,6 +852,8 @@ docker compose -f deploy/docker/docker-compose.yml up --build
 | `AGENT_NOTIFY_CLAUDE_COMPLETION_MIN_SECONDS` | 否 | `120` | Claude Code 完成通知阈值，`0` 关闭 |
 | `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS` | 否 | `120` | Codex 完成通知阈值，`0` 关闭 |
 | `AGENT_NOTIFY_OPENCODE_COMPLETION_MIN_SECONDS` | 否 | `120` | OpenCode 完成通知阈值，`0` 关闭 |
+| `AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS` | 否 | `120` | Cursor Agent 完成通知阈值，`0` 关闭 |
+| `AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS` | 否 | `120` | Grok Build 完成通知阈值，`0` 关闭 |
 | `AGENT_NOTIFY_LOG_RAW` | 否 | `false` | 是否记录原始 raw payload，排查时临时开启 |
 
 下面几项在 `docker-compose.yml` 里固定，一般不需要改：
@@ -730,6 +862,7 @@ docker compose -f deploy/docker/docker-compose.yml up --build
 - `AGENT_NOTIFY_LOG_PATH=/data/events.jsonl`：日志写到挂载卷。
 - 端口映射 `8787:8787`：宿主机 `8787` → 容器 `8787`，宿主机端口冲突时改左边的数字。
 - 挂载卷 `agent-notify-data:/data`：持久化日志，`docker compose down -v` 才会删。
+- `restart: unless-stopped`：容器退出或 Docker / OrbStack 开机后自动拉起；手动 `docker compose stop` 后不会自动再起。
 
 用 ntfy 时：
 
@@ -856,7 +989,9 @@ AGENT_NOTIFY_TOKENS=macbook:my-long-random-token
 
 - **OpenCode**：完成阈值在服务端 `AGENT_NOTIFY_OPENCODE_COMPLETION_MIN_SECONDS`（默认 `120`）。会话从 `busy` 到 `idle` 的耗时必须达到阈值才会推。短任务不推是正常的。验证时可临时把服务端 `.env` 的 `AGENT_NOTIFY_OPENCODE_COMPLETION_MIN_SECONDS` 设为 `5`，跑一个超过 5 秒的任务。同一轮如果先报错（`session.error`），后续 `idle` 不会再推完成通知。
 - **Claude Code**：阈值在服务端 `AGENT_NOTIFY_CLAUDE_COMPLETION_MIN_SECONDS`（默认 `120`）。必须 `UserPromptSubmit` 先记录本轮开始时间，`Stop` 时才判断；如果 `UserPromptSubmit` hook 没配或没触发，`Stop` 就没有起始时间，不会推完成通知。确认四个 hook 都配了。`StopFailure` 会清掉本轮状态并发失败通知，不再发完成通知。
-- **Codex**：阈值在服务端 `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS`（默认 `120`）。同样依赖 `UserPromptSubmit` 记录开始时间，确认三个 hook 都配了且 Codex `/hooks` 已 trust。
+- **Codex**：阈值在服务端 `AGENT_NOTIFY_CODEX_COMPLETION_MIN_SECONDS`（默认 `120`）。同样依赖 `UserPromptSubmit` 记录开始时间，确认 `UserPromptSubmit`、`Stop`、`PostToolUseFailure` 都配了且 Codex `/hooks` 已 trust。用户中断走 `PostToolUseFailure`（`is_interrupt: true`），不走完成阈值。
+- **Cursor Agent**：阈值在服务端 `AGENT_NOTIFY_CURSOR_COMPLETION_MIN_SECONDS`（默认 `120`）。必须 `beforeSubmitPrompt` 先记录开始时间，`stop` 且 `status=completed` 时才判断。`aborted` / `error` 立即发失败通知。确认 `~/.cursor/hooks.json` 里三个 hook 都指向 adapter。
+- **Grok Build**：阈值在服务端 `AGENT_NOTIFY_GROK_COMPLETION_MIN_SECONDS`（默认 `120`）。必须 `UserPromptSubmit` 先记录开始时间。`StopCancelled` / `StopFailure` 立即发失败通知。全局 hook 在 `~/.grok/hooks/agent-notify.json`，现有会话用 `/hooks` 然后按 `r` 重载。
 
 排查技巧：把阈值临时调到 `5`，跑一个明显超过 5 秒的任务，比等 120 秒快得多。验证完改回 `120`。
 

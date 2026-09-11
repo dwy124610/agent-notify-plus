@@ -1,6 +1,6 @@
-// Codex hook adapter: forwards notification-worthy events to agent-notify server.
-// Configure Codex command hooks to run this file with node.
-// Required config: ~/.config/agent-notify/codex.json.
+// Cursor Agent hook adapter: forwards completion and abort events to agent-notify.
+// Configure Cursor command hooks to run this file with node.
+// Required config: ~/.config/agent-notify/cursor-agent.json.
 
 import {
   appendFileSync,
@@ -13,54 +13,55 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const NOTIFY_EVENT_NAMES = new Set([
-  "UserPromptSubmit",
-  "PermissionRequest",
-  "Stop",
-  "PostToolUseFailure",
-]);
+const FORWARD_EVENT_NAMES = new Set(["beforeSubmitPrompt", "stop"]);
+const MAX_CACHED_SUMMARIES = 20;
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getHookEventName(raw) {
-  if (!isRecord(raw)) return undefined;
-  return typeof raw.hook_event_name === "string"
-    ? raw.hook_event_name
-    : undefined;
+function getString(value) {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function getSessionId(raw) {
+export function normalizeCursorHookEvent(raw) {
   if (!isRecord(raw)) return undefined;
-  return typeof raw.session_id === "string" && raw.session_id.trim()
-    ? raw.session_id
-    : undefined;
+  const name = getString(raw.hook_event_name);
+  if (!name) return undefined;
+  const aliases = {
+    beforesubmitprompt: "beforeSubmitPrompt",
+    userpromptsubmit: "beforeSubmitPrompt",
+    stop: "stop",
+    afteragentresponse: "afterAgentResponse",
+    agentresponse: "afterAgentResponse",
+  };
+  return aliases[name.toLowerCase()] ?? name;
 }
 
-function getToolName(raw) {
+export function getCursorSessionId(raw) {
   if (!isRecord(raw)) return undefined;
-  return typeof raw.tool_name === "string" && raw.tool_name.trim()
-    ? raw.tool_name
-    : undefined;
+  return getString(raw.session_id) ?? getString(raw.conversation_id);
 }
 
-export function shouldForwardCodexEvent(raw, config = {}) {
-  const hookEventName = getHookEventName(raw);
-  if (hookEventName === "PermissionRequest") {
-    return config.notifyPermissionRequests === true;
+function getCursorCwd(raw) {
+  if (!isRecord(raw)) return undefined;
+  const cwd = getString(raw.cwd);
+  if (cwd) return cwd;
+  if (Array.isArray(raw.workspace_roots)) {
+    return getString(raw.workspace_roots[0]);
   }
-  if (hookEventName === "PostToolUseFailure") {
-    return isRecord(raw) && raw.is_interrupt === true;
-  }
-  return typeof hookEventName === "string" && NOTIFY_EVENT_NAMES.has(hookEventName);
+  return undefined;
 }
 
-export function summarizeCodexEventForDebug(raw) {
+export function shouldForwardCursorAgentEvent(raw) {
+  const hookEventName = normalizeCursorHookEvent(raw);
+  return typeof hookEventName === "string" && FORWARD_EVENT_NAMES.has(hookEventName);
+}
+
+export function summarizeCursorAgentEventForDebug(raw) {
   return {
-    hookEventName: getHookEventName(raw) ?? "unknown",
-    sessionId: getSessionId(raw),
-    toolName: getToolName(raw),
+    hookEventName: normalizeCursorHookEvent(raw) ?? "unknown",
+    sessionId: getCursorSessionId(raw),
     raw,
   };
 }
@@ -76,15 +77,75 @@ function writeDebugLog(config, raw, forwarded, sent, extra = {}) {
         forwarded,
         sent,
         ...extra,
-        ...summarizeCodexEventForDebug(raw),
+        ...summarizeCursorAgentEventForDebug(raw),
       })}\n`,
     );
   } catch {
-    // Fail-safe: debug logging must never block Codex.
+    // Fail-safe: debug logging must never block Cursor Agent.
   }
 }
 
-export async function sendCodexEvent(
+export function getCursorSummaryPath(home = homedir()) {
+  return join(home, ".config", "agent-notify", "state", "cursor-agent-summaries.json");
+}
+
+function readSummaryCache(summaryPath) {
+  try {
+    if (!existsSync(summaryPath)) return {};
+    const raw = JSON.parse(readFileSync(summaryPath, "utf8"));
+    return isRecord(raw) ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSummaryCache(summaryPath, cache) {
+  mkdirSync(dirname(summaryPath), { recursive: true });
+  const entries = Object.entries(cache)
+    .sort(([, left], [, right]) => {
+      const leftMs = Date.parse(isRecord(left) ? left.updatedAt : "");
+      const rightMs = Date.parse(isRecord(right) ? right.updatedAt : "");
+      return (Number.isFinite(rightMs) ? rightMs : 0) - (Number.isFinite(leftMs) ? leftMs : 0);
+    })
+    .slice(0, MAX_CACHED_SUMMARIES);
+  writeFileSync(summaryPath, JSON.stringify(Object.fromEntries(entries), null, 2), "utf8");
+}
+
+export function rememberCursorSummary(summaryPath, sessionId, text, now = new Date()) {
+  if (!sessionId || !text) return;
+  const cache = readSummaryCache(summaryPath);
+  cache[sessionId] = { text, updatedAt: now.toISOString() };
+  writeSummaryCache(summaryPath, cache);
+}
+
+export function consumeCursorSummary(summaryPath, sessionId) {
+  if (!sessionId) return undefined;
+  const cache = readSummaryCache(summaryPath);
+  const entry = cache[sessionId];
+  if (!isRecord(entry) || typeof entry.text !== "string") return undefined;
+  delete cache[sessionId];
+  writeSummaryCache(summaryPath, cache);
+  return entry.text;
+}
+
+export function enrichCursorAgentRaw(raw, summaryPath) {
+  if (!isRecord(raw)) return raw;
+  const next = { ...raw };
+  const hookEventName = normalizeCursorHookEvent(raw);
+  if (hookEventName) next.hook_event_name = hookEventName;
+  const sessionId = getCursorSessionId(raw);
+  if (sessionId && !next.session_id) next.session_id = sessionId;
+  const cwd = getCursorCwd(raw);
+  if (cwd && !next.cwd) next.cwd = cwd;
+  if (hookEventName === "stop") {
+    const cached = consumeCursorSummary(summaryPath, sessionId);
+    const text = getString(next.last_assistant_message) ?? cached ?? getString(next.text);
+    if (text) next.last_assistant_message = text;
+  }
+  return next;
+}
+
+export async function sendCursorAgentEvent(
   serverUrl,
   token,
   timeoutMs,
@@ -100,7 +161,7 @@ export async function sendCodexEvent(
         "content-type": "application/json",
         authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ agent: "codex", raw }),
+      body: JSON.stringify({ agent: "cursor-agent", raw }),
       signal: controller.signal,
     });
     return response.ok;
@@ -242,11 +303,11 @@ export function parseAgentNotifyCommand(prompt, now = new Date()) {
   };
 }
 
-export function getCodexSwitchStatePath(home = homedir()) {
-  return join(home, ".config", "agent-notify", "state", "codex.json");
+export function getCursorAgentSwitchStatePath(home = homedir()) {
+  return join(home, ".config", "agent-notify", "state", "cursor-agent.json");
 }
 
-export function readCodexSwitchState(statePath) {
+export function readCursorAgentSwitchState(statePath) {
   try {
     if (!existsSync(statePath)) return emptySwitchState();
     const raw = JSON.parse(readFileSync(statePath, "utf8"));
@@ -272,12 +333,12 @@ export function readCodexSwitchState(statePath) {
   }
 }
 
-export function writeCodexSwitchState(statePath, state) {
+export function writeCursorAgentSwitchState(statePath, state) {
   mkdirSync(dirname(statePath), { recursive: true });
   writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
 }
 
-export function applyCodexSwitchCommand(
+export function applyCursorAgentSwitchCommand(
   state,
   command,
   sessionId,
@@ -296,14 +357,14 @@ export function applyCodexSwitchCommand(
     next.persistentDisabled = false;
     delete next.temporaryDisabledUntil;
     if (sessionId) delete next.disabledSessions[sessionId];
-    return { state: next, message: "AgentNotify is on for Codex." };
+    return { state: next, message: "AgentNotify is on for Cursor Agent." };
   }
 
   if (command.type === "off-persist") {
     next.persistentDisabled = true;
     return {
       state: next,
-      message: "AgentNotify is persistently muted for Codex.",
+      message: "AgentNotify is persistently muted for Cursor Agent.",
     };
   }
 
@@ -311,7 +372,7 @@ export function applyCodexSwitchCommand(
     next.temporaryDisabledUntil = command.until;
     return {
       state: next,
-      message: `AgentNotify is muted for Codex until ${command.until}.`,
+      message: `AgentNotify is muted for Cursor Agent until ${command.until}.`,
     };
   }
 
@@ -319,7 +380,7 @@ export function applyCodexSwitchCommand(
     next.disabledSessions = {};
     return {
       state: next,
-      message: "AgentNotify session mutes are cleared for Codex.",
+      message: "AgentNotify session mutes are cleared for Cursor Agent.",
     };
   }
 
@@ -335,14 +396,14 @@ export function applyCodexSwitchCommand(
     next.disabledSessions = trimDisabledSessions(next.disabledSessions);
     return {
       state: next,
-      message: "AgentNotify is muted for this Codex session.",
+      message: "AgentNotify is muted for this Cursor Agent session.",
     };
   }
 
   return { state: next, message: command.message ?? "Invalid AgentNotify command." };
 }
 
-export function getCodexMuteReason(state, sessionId, now = new Date()) {
+export function getCursorAgentMuteReason(state, sessionId, now = new Date()) {
   if (state.persistentDisabled === true) return "persistent";
   if (typeof state.temporaryDisabledUntil === "string") {
     const untilMs = Date.parse(state.temporaryDisabledUntil);
@@ -354,36 +415,33 @@ export function getCodexMuteReason(state, sessionId, now = new Date()) {
   return undefined;
 }
 
-function getCodexStatusMessage(state, sessionId, now = new Date()) {
-  const muted = getCodexMuteReason(state, sessionId, now);
+function getCursorAgentStatusMessage(state, sessionId, now = new Date()) {
+  const muted = getCursorAgentMuteReason(state, sessionId, now);
   if (muted === "persistent") {
-    return "AgentNotify is persistently muted for Codex.";
+    return "AgentNotify is persistently muted for Cursor Agent.";
   }
   if (muted === "timed") {
-    return `AgentNotify is muted for Codex until ${state.temporaryDisabledUntil}.`;
+    return `AgentNotify is muted for Cursor Agent until ${state.temporaryDisabledUntil}.`;
   }
   if (muted === "session") {
-    return "AgentNotify is muted for this Codex session.";
+    return "AgentNotify is muted for this Cursor Agent session.";
   }
-  return "AgentNotify is on for Codex.";
+  return "AgentNotify is on for Cursor Agent.";
 }
 
-export function parseCodexConfig(raw) {
+export function parseCursorAgentConfig(raw) {
   return {
     serverUrl: readRequiredString(raw, "serverUrl"),
     token: readRequiredString(raw, "token"),
     timeoutMs: readOptionalNumber(raw, "timeoutMs") ?? DEFAULT_TIMEOUT_MS,
-    notifyPermissionRequests:
-      readOptionalBoolean(raw.notifyPermissionRequests, "notifyPermissionRequests") ??
-      false,
     debugLogPath: readOptionalString(raw, "debugLogPath"),
   };
 }
 
 function readAgentNotifyConfig() {
-  const configPath = join(homedir(), ".config", "agent-notify", "codex.json");
+  const configPath = join(homedir(), ".config", "agent-notify", "cursor-agent.json");
   const raw = JSON.parse(readFileSync(configPath, "utf8"));
-  return parseCodexConfig(raw);
+  return parseCursorAgentConfig(raw);
 }
 
 async function readStdin() {
@@ -399,13 +457,21 @@ function getPrompt(raw) {
   return typeof raw.prompt === "string" ? raw.prompt : undefined;
 }
 
-export async function handleCodexEvent(config, raw, deps = {}) {
+export function cursorHookResponse(raw) {
+  return normalizeCursorHookEvent(raw) === "beforeSubmitPrompt"
+    ? { continue: true }
+    : {};
+}
+
+export async function handleCursorAgentEvent(config, raw, deps = {}) {
   const now = deps.now ?? new Date();
-  const statePath = deps.statePath ?? getCodexSwitchStatePath();
-  const readState = deps.readState ?? readCodexSwitchState;
-  const writeState = deps.writeState ?? writeCodexSwitchState;
+  const statePath = deps.statePath ?? getCursorAgentSwitchStatePath();
+  const summaryPath = deps.summaryPath ?? getCursorSummaryPath();
+  const readState = deps.readState ?? readCursorAgentSwitchState;
+  const writeState = deps.writeState ?? writeCursorAgentSwitchState;
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const sessionId = getSessionId(raw);
+  const hookEventName = normalizeCursorHookEvent(raw);
+  const sessionId = getCursorSessionId(raw);
   let state;
   let debug;
   try {
@@ -418,9 +484,15 @@ export async function handleCodexEvent(config, raw, deps = {}) {
     state = emptySwitchState();
     debug = { switchStateReadError: `state-read: ${message}` };
   }
+
+  if (hookEventName === "afterAgentResponse") {
+    rememberCursorSummary(summaryPath, sessionId, getString(isRecord(raw) ? raw.text : undefined), now);
+    return { forwarded: false, sent: false, cached: true, ...(debug ? { debug } : {}) };
+  }
+
   const command = parseAgentNotifyCommand(getPrompt(raw), now);
 
-  if (getHookEventName(raw) === "UserPromptSubmit" && command.type !== "none") {
+  if (hookEventName === "beforeSubmitPrompt" && command.type !== "none") {
     if (command.type === "status") {
       const nextState = sessionId ? { ...state, currentSessionId: sessionId } : state;
       if (sessionId && !debug) {
@@ -440,11 +512,11 @@ export async function handleCodexEvent(config, raw, deps = {}) {
         forwarded: false,
         sent: false,
         command: command.type,
-        message: getCodexStatusMessage(state, sessionId, now),
+        message: getCursorAgentStatusMessage(state, sessionId, now),
         ...(debug ? { debug } : {}),
       };
     }
-    const result = applyCodexSwitchCommand(state, command, sessionId, now);
+    const result = applyCursorAgentSwitchCommand(state, command, sessionId, now);
     if (command.type !== "invalid" && sessionId) {
       result.state.currentSessionId = sessionId;
     }
@@ -470,41 +542,53 @@ export async function handleCodexEvent(config, raw, deps = {}) {
     };
   }
 
-  const forwarded = shouldForwardCodexEvent(raw, config);
+  const forwarded = shouldForwardCursorAgentEvent(raw);
   if (!forwarded) return { forwarded: false, sent: false };
 
-  const muted = getCodexMuteReason(state, sessionId, now);
+  const muted = getCursorAgentMuteReason(state, sessionId, now);
   if (muted) {
     return { forwarded: true, sent: false, muted, ...(debug ? { debug } : {}) };
   }
 
-  const sent = await sendCodexEvent(
+  const payload = enrichCursorAgentRaw(raw, summaryPath);
+  const sent = await sendCursorAgentEvent(
     config.serverUrl,
     config.token,
     config.timeoutMs,
-    raw,
+    payload,
     fetchImpl,
   );
   return { forwarded: true, sent, ...(debug ? { debug } : {}) };
 }
 
+function writeCursorHookResponse(raw) {
+  try {
+    process.stdout.write(`${JSON.stringify(cursorHookResponse(raw))}\n`);
+  } catch {
+    // Fail-safe: Cursor must never be blocked by adapter stdout errors.
+  }
+}
+
 async function main() {
   let config;
-  try {
-    config = readAgentNotifyConfig();
-  } catch {
-    return;
-  }
-
   let raw;
   try {
     raw = JSON.parse(await readStdin());
   } catch {
+    writeCursorHookResponse(undefined);
     return;
   }
 
-  const result = await handleCodexEvent(config, raw);
+  try {
+    config = readAgentNotifyConfig();
+  } catch {
+    writeCursorHookResponse(raw);
+    return;
+  }
+
+  const result = await handleCursorAgentEvent(config, raw);
   writeDebugLog(config, raw, result.forwarded, result.sent, result.debug);
+  writeCursorHookResponse(raw);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

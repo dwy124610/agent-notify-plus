@@ -11,8 +11,7 @@ import { prefixTitleWithProject } from "./project-title.js";
 
 const MAX_BODY_LENGTH = 80;
 const MAX_SUMMARY_LENGTH = 280;
-const CODEX_ICON_URL =
-  "https://cdn.jsdelivr.net/gh/LetTTGACO/agent-notify@main/assets/codex.png";
+const CURSOR_AGENT_ICON_URL = "https://www.cursor.com/apple-touch-icon.png";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -45,58 +44,47 @@ function truncate(value: string, maxLength = MAX_BODY_LENGTH): string {
 
 function requireRawRecord(raw: unknown): UnknownRecord {
   if (!isRecord(raw)) {
-    throw new EventFormatError("Codex raw payload must be an object");
+    throw new EventFormatError("Cursor Agent raw payload must be an object");
   }
   return raw;
 }
 
+export function normalizeCursorHookEvent(value: unknown): string | undefined {
+  const name = getString(value);
+  if (!name) return undefined;
+  const aliases: Record<string, string> = {
+    beforesubmitprompt: "beforeSubmitPrompt",
+    userpromptsubmit: "beforeSubmitPrompt",
+    stop: "stop",
+    afteragentresponse: "afterAgentResponse",
+    agentresponse: "afterAgentResponse",
+    sessionend: "sessionEnd",
+  };
+  return aliases[name.toLowerCase()] ?? name;
+}
+
 function requireHookEvent(raw: UnknownRecord): string {
-  const hookEvent = getString(raw.hook_event_name);
+  const hookEvent = normalizeCursorHookEvent(raw.hook_event_name);
   if (!hookEvent) {
-    throw new EventFormatError("Codex raw payload is missing hook_event_name");
+    throw new EventFormatError("Cursor Agent raw payload is missing hook_event_name");
   }
   return hookEvent;
 }
 
-function toolInput(raw: UnknownRecord): UnknownRecord {
-  return isRecord(raw.tool_input) ? raw.tool_input : {};
-}
-
 function sessionId(raw: UnknownRecord): string | undefined {
-  return getString(raw.session_id);
+  return getString(raw.session_id) ?? getString(raw.conversation_id);
 }
 
-function permissionTitle(language: NotificationLanguage): string {
-  return language === "zh" ? "需要批准" : "Approve permission";
+function stopStatus(raw: UnknownRecord): string {
+  return (getString(raw.status) ?? getString(raw.reason) ?? "completed").toLowerCase();
 }
 
 function completedTitle(language: NotificationLanguage): string {
   return language === "zh" ? "待审阅" : "Ready to review";
 }
 
-function permissionFallback(language: NotificationLanguage): string {
-  return language === "zh" ? "请回到 Codex 查看" : "Check Codex";
-}
-
 function completedFallback(language: NotificationLanguage): string {
   return language === "zh" ? "看看结果或下一步" : "Review results or next steps";
-}
-
-function permissionBody(raw: UnknownRecord, language: NotificationLanguage): string {
-  const input = toolInput(raw);
-  return truncate(
-    getString(input.description) ??
-      getString(input.command) ??
-      getString(raw.tool_name) ??
-      permissionFallback(language),
-  );
-}
-
-function completionBody(raw: UnknownRecord, language: NotificationLanguage): string {
-  return truncate(
-    getString(raw.last_assistant_message) ?? completedFallback(language),
-    MAX_SUMMARY_LENGTH,
-  );
 }
 
 function failedTitle(language: NotificationLanguage): string {
@@ -107,44 +95,61 @@ function failedFallback(language: NotificationLanguage): string {
   return language === "zh" ? "任务异常终止" : "Task failed";
 }
 
+function completionBody(raw: UnknownRecord, language: NotificationLanguage): string {
+  return truncate(
+    getString(raw.last_assistant_message) ??
+      getString(raw.text) ??
+      completedFallback(language),
+    MAX_SUMMARY_LENGTH,
+  );
+}
+
 function failureBody(raw: UnknownRecord, language: NotificationLanguage): string {
   return truncate(
-    getString(raw.error) ??
-      getString(raw.error_details) ??
+    getString(raw.error_message) ??
+      getString(raw.error) ??
       getString(raw.last_assistant_message) ??
-      getString(raw.message) ??
+      getString(raw.text) ??
       failedFallback(language),
     MAX_SUMMARY_LENGTH,
   );
 }
 
-export function formatCodexEvent(
+function isFailureStatus(status: string): boolean {
+  return status === "error" || status === "aborted";
+}
+
+export function formatCursorAgentEvent(
   event: IncomingAgentEvent,
   options?: FormatterOptions,
 ): FormattedAgentEvent {
   const language = languageFromOptions(options);
   const raw = requireRawRecord(event.raw);
   const sourceEvent = requireHookEvent(raw);
-  const cwd = options?.cwd ?? raw.cwd;
+  const cwd =
+    options?.cwd ??
+    raw.cwd ??
+    (Array.isArray(raw.workspace_roots) ? raw.workspace_roots[0] : undefined);
   const title = (value: string) => prefixTitleWithProject(value, cwd);
 
-  if (sourceEvent === "PermissionRequest") {
-    return {
-      agent: event.agent,
-      kind: "permission_required",
-      sourceEvent,
-      sessionId: sessionId(raw),
-      notification: {
-        title: title(permissionTitle(language)),
-        body: permissionBody(raw, language),
-        urgency: "time_sensitive",
-        group: "Codex",
-        icon: CODEX_ICON_URL,
-      },
-    };
-  }
+  if (sourceEvent === "stop") {
+    const status = stopStatus(raw);
+    if (isFailureStatus(status)) {
+      return {
+        agent: event.agent,
+        kind: "failed",
+        sourceEvent,
+        sessionId: sessionId(raw),
+        notification: {
+          title: title(failedTitle(language)),
+          body: failureBody(raw, language),
+          urgency: "time_sensitive",
+          group: "Cursor Agent",
+          icon: CURSOR_AGENT_ICON_URL,
+        },
+      };
+    }
 
-  if (sourceEvent === "Stop") {
     return {
       agent: event.agent,
       kind: "completed",
@@ -154,27 +159,11 @@ export function formatCodexEvent(
         title: title(completedTitle(language)),
         body: completionBody(raw, language),
         urgency: "time_sensitive",
-        group: "Codex",
-        icon: CODEX_ICON_URL,
+        group: "Cursor Agent",
+        icon: CURSOR_AGENT_ICON_URL,
       },
     };
   }
 
-  if (sourceEvent === "PostToolUseFailure") {
-    return {
-      agent: event.agent,
-      kind: "failed",
-      sourceEvent,
-      sessionId: sessionId(raw),
-      notification: {
-        title: title(failedTitle(language)),
-        body: failureBody(raw, language),
-        urgency: "time_sensitive",
-        group: "Codex",
-        icon: CODEX_ICON_URL,
-      },
-    };
-  }
-
-  throw new EventFormatError(`Unsupported Codex hook event: ${sourceEvent}`);
+  throw new EventFormatError(`Unsupported Cursor Agent hook event: ${sourceEvent}`);
 }

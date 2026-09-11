@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AgentNotifyPlugin,
   addOpenCodeCwd,
+  extractLastAssistantMessage,
   getOpenCodeMuteReason,
   getOpenCodeSessionId,
   notify,
@@ -54,6 +55,23 @@ describe("OpenCode plugin example", () => {
     expect(parseAgentNotifyCommand("/agent-notify off forever", now).type).toBe(
       "invalid",
     );
+  });
+
+  it("extracts the latest assistant text from session messages", () => {
+    expect(
+      extractLastAssistantMessage({
+        data: [
+          {
+            info: { role: "user" },
+            parts: [{ type: "text", text: "please deploy" }],
+          },
+          {
+            info: { role: "assistant" },
+            parts: [{ type: "text", text: "Deployed AgentNotify with Docker." }],
+          },
+        ],
+      }),
+    ).toBe("Deployed AgentNotify with Docker.");
   });
 
   it("extracts OpenCode session ids from top-level and properties fields", () => {

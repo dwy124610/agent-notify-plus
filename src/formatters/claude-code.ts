@@ -10,6 +10,7 @@ import {
 import { prefixTitleWithProject } from "./project-title.js";
 
 const MAX_BODY_LENGTH = 80;
+const MAX_SUMMARY_LENGTH = 280;
 const CLAUDE_CODE_ICON_URL =
   "https://cdn.jsdelivr.net/gh/LetTTGACO/agent-notify@main/assets/claude-code.png";
 
@@ -69,8 +70,15 @@ function completedTitle(language: NotificationLanguage): string {
   return language === "zh" ? "待审阅" : "Ready to review";
 }
 
-function completedBody(language: NotificationLanguage): string {
+function completedFallback(language: NotificationLanguage): string {
   return language === "zh" ? "看看结果或下一步" : "Review results or next steps";
+}
+
+function completionBody(raw: UnknownRecord, language: NotificationLanguage): string {
+  return truncate(
+    getString(raw.last_assistant_message) ?? completedFallback(language),
+    MAX_SUMMARY_LENGTH,
+  );
 }
 
 function failedTitle(language: NotificationLanguage): string {
@@ -100,6 +108,7 @@ function failureMessage(raw: UnknownRecord, language: NotificationLanguage): str
       getString(raw.message) ??
       getString(raw.error) ??
       failedFallback(language),
+    MAX_SUMMARY_LENGTH,
   );
 }
 
@@ -144,7 +153,7 @@ export function formatClaudeCodeEvent(
       sessionId: sessionId(raw),
       notification: {
         title: title(completedTitle(language)),
-        body: completedBody(language),
+        body: completionBody(raw, language),
         urgency: "time_sensitive",
         group: "Claude Code",
         icon: CLAUDE_CODE_ICON_URL,

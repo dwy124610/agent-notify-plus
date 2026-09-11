@@ -118,6 +118,24 @@ describe("OpenCode formatter", () => {
     });
   });
 
+  it("formats session.idle using last_assistant_message", () => {
+    const formatted = formatOpenCodeEvent({
+      agent: "opencode",
+      raw: {
+        id: "evt_complete_summary",
+        type: "session.idle",
+        last_assistant_message: "Installed the OpenCode plugin and verified idle completion.",
+        properties: {
+          sessionID: "session_complete_summary",
+        },
+      },
+    });
+
+    expect(formatted.notification.body).toBe(
+      "Installed the OpenCode plugin and verified idle completion.",
+    );
+  });
+
   it("formats question.asked as a short answer-required notification", () => {
     const formatted = formatOpenCodeEvent({
       agent: "opencode",

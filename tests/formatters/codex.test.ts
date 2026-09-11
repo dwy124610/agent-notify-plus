@@ -102,6 +102,29 @@ describe("Codex formatter", () => {
     });
   });
 
+  it("formats interrupted PostToolUseFailure as a failed notification", () => {
+    const formatted = formatCodexEvent({
+      agent: "codex",
+      raw: {
+        hook_event_name: "PostToolUseFailure",
+        session_id: "codex_session_interrupt",
+        is_interrupt: true,
+        error: "interrupted by user",
+      },
+    });
+
+    expect(formatted).toMatchObject({
+      kind: "failed",
+      sourceEvent: "PostToolUseFailure",
+      sessionId: "codex_session_interrupt",
+      notification: {
+        title: "Failed",
+        body: "interrupted by user",
+        group: "Codex",
+      },
+    });
+  });
+
   it("formats Stop with completion fallback body", () => {
     const formatted = formatCodexEvent({
       agent: "codex",

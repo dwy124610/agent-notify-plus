@@ -11,8 +11,7 @@ import { prefixTitleWithProject } from "./project-title.js";
 
 const MAX_BODY_LENGTH = 80;
 const MAX_SUMMARY_LENGTH = 280;
-const CODEX_ICON_URL =
-  "https://cdn.jsdelivr.net/gh/LetTTGACO/agent-notify@main/assets/codex.png";
+const GROK_BUILD_ICON_URL = "https://grok.com/apple-touch-icon.png";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -45,58 +44,47 @@ function truncate(value: string, maxLength = MAX_BODY_LENGTH): string {
 
 function requireRawRecord(raw: unknown): UnknownRecord {
   if (!isRecord(raw)) {
-    throw new EventFormatError("Codex raw payload must be an object");
+    throw new EventFormatError("Grok Build raw payload must be an object");
   }
   return raw;
 }
 
+export function normalizeGrokBuildHookEvent(value: unknown): string | undefined {
+  const name = getString(value);
+  if (!name) return undefined;
+  const aliases: Record<string, string> = {
+    userpromptsubmit: "UserPromptSubmit",
+    stop: "Stop",
+    stopfailure: "StopFailure",
+    stopcancelled: "StopCancelled",
+  };
+  return aliases[name.replace(/_/g, "").toLowerCase()] ?? name;
+}
+
 function requireHookEvent(raw: UnknownRecord): string {
-  const hookEvent = getString(raw.hook_event_name);
+  const hookEvent =
+    normalizeGrokBuildHookEvent(raw.hook_event_name) ??
+    normalizeGrokBuildHookEvent(raw.hookEventName);
   if (!hookEvent) {
-    throw new EventFormatError("Codex raw payload is missing hook_event_name");
+    throw new EventFormatError("Grok Build raw payload is missing hook_event_name");
   }
   return hookEvent;
 }
 
-function toolInput(raw: UnknownRecord): UnknownRecord {
-  return isRecord(raw.tool_input) ? raw.tool_input : {};
-}
-
 function sessionId(raw: UnknownRecord): string | undefined {
-  return getString(raw.session_id);
+  return getString(raw.session_id) ?? getString(raw.sessionId);
 }
 
-function permissionTitle(language: NotificationLanguage): string {
-  return language === "zh" ? "需要批准" : "Approve permission";
+function lastAssistantMessage(raw: UnknownRecord): string | undefined {
+  return getString(raw.last_assistant_message) ?? getString(raw.lastAssistantMessage);
 }
 
 function completedTitle(language: NotificationLanguage): string {
   return language === "zh" ? "待审阅" : "Ready to review";
 }
 
-function permissionFallback(language: NotificationLanguage): string {
-  return language === "zh" ? "请回到 Codex 查看" : "Check Codex";
-}
-
 function completedFallback(language: NotificationLanguage): string {
   return language === "zh" ? "看看结果或下一步" : "Review results or next steps";
-}
-
-function permissionBody(raw: UnknownRecord, language: NotificationLanguage): string {
-  const input = toolInput(raw);
-  return truncate(
-    getString(input.description) ??
-      getString(input.command) ??
-      getString(raw.tool_name) ??
-      permissionFallback(language),
-  );
-}
-
-function completionBody(raw: UnknownRecord, language: NotificationLanguage): string {
-  return truncate(
-    getString(raw.last_assistant_message) ?? completedFallback(language),
-    MAX_SUMMARY_LENGTH,
-  );
 }
 
 function failedTitle(language: NotificationLanguage): string {
@@ -107,42 +95,47 @@ function failedFallback(language: NotificationLanguage): string {
   return language === "zh" ? "任务异常终止" : "Task failed";
 }
 
+function completionBody(raw: UnknownRecord, language: NotificationLanguage): string {
+  return truncate(lastAssistantMessage(raw) ?? completedFallback(language), MAX_SUMMARY_LENGTH);
+}
+
+function cancelledReasonLabel(
+  reason: string | undefined,
+  language: NotificationLanguage,
+): string | undefined {
+  if (!reason) return undefined;
+  if (reason === "user_interrupt") {
+    return language === "zh" ? "用户中断" : "Interrupted by user";
+  }
+  if (reason === "permission_rejected" || reason === "permission_cancelled") {
+    return language === "zh" ? "权限被拒绝" : "Permission declined";
+  }
+  return undefined;
+}
+
 function failureBody(raw: UnknownRecord, language: NotificationLanguage): string {
   return truncate(
-    getString(raw.error) ??
+    getString(raw.errorDetails) ??
       getString(raw.error_details) ??
-      getString(raw.last_assistant_message) ??
-      getString(raw.message) ??
+      getString(raw.reasonDetails) ??
+      getString(raw.reason_details) ??
+      lastAssistantMessage(raw) ??
+      getString(raw.error) ??
+      cancelledReasonLabel(getString(raw.reason), language) ??
       failedFallback(language),
     MAX_SUMMARY_LENGTH,
   );
 }
 
-export function formatCodexEvent(
+export function formatGrokBuildEvent(
   event: IncomingAgentEvent,
   options?: FormatterOptions,
 ): FormattedAgentEvent {
   const language = languageFromOptions(options);
   const raw = requireRawRecord(event.raw);
   const sourceEvent = requireHookEvent(raw);
-  const cwd = options?.cwd ?? raw.cwd;
+  const cwd = options?.cwd ?? raw.cwd ?? raw.workspaceRoot;
   const title = (value: string) => prefixTitleWithProject(value, cwd);
-
-  if (sourceEvent === "PermissionRequest") {
-    return {
-      agent: event.agent,
-      kind: "permission_required",
-      sourceEvent,
-      sessionId: sessionId(raw),
-      notification: {
-        title: title(permissionTitle(language)),
-        body: permissionBody(raw, language),
-        urgency: "time_sensitive",
-        group: "Codex",
-        icon: CODEX_ICON_URL,
-      },
-    };
-  }
 
   if (sourceEvent === "Stop") {
     return {
@@ -154,13 +147,13 @@ export function formatCodexEvent(
         title: title(completedTitle(language)),
         body: completionBody(raw, language),
         urgency: "time_sensitive",
-        group: "Codex",
-        icon: CODEX_ICON_URL,
+        group: "Grok Build",
+        icon: GROK_BUILD_ICON_URL,
       },
     };
   }
 
-  if (sourceEvent === "PostToolUseFailure") {
+  if (sourceEvent === "StopFailure" || sourceEvent === "StopCancelled") {
     return {
       agent: event.agent,
       kind: "failed",
@@ -170,11 +163,11 @@ export function formatCodexEvent(
         title: title(failedTitle(language)),
         body: failureBody(raw, language),
         urgency: "time_sensitive",
-        group: "Codex",
-        icon: CODEX_ICON_URL,
+        group: "Grok Build",
+        icon: GROK_BUILD_ICON_URL,
       },
     };
   }
 
-  throw new EventFormatError(`Unsupported Codex hook event: ${sourceEvent}`);
+  throw new EventFormatError(`Unsupported Grok Build hook event: ${sourceEvent}`);
 }

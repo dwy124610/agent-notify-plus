@@ -1,4 +1,5 @@
 import type { IncomingAgentEvent } from "../core/incoming-event.js";
+import { normalizeGrokBuildHookEvent } from "../formatters/grok-build.js";
 
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_SESSIONS = 1000;
@@ -14,14 +15,14 @@ interface PinnedCwd {
   startedAtMs: number;
 }
 
-export interface CodexSessionPolicyOptions {
+export interface GrokBuildSessionPolicyOptions {
   completionMinSeconds: number;
   ttlMs?: number;
   maxSessions?: number;
   nowMs?: () => number;
 }
 
-export type CodexSessionPolicyDecision =
+export type GrokBuildSessionPolicyDecision =
   | { action: "continue"; cwd?: string }
   | {
       action: "suppress";
@@ -45,15 +46,23 @@ function getString(value: unknown): string | undefined {
 
 function hookEventName(raw: unknown): string | undefined {
   if (!isRecord(raw)) return undefined;
-  return getString(raw.hook_event_name);
+  return (
+    normalizeGrokBuildHookEvent(raw.hook_event_name) ??
+    normalizeGrokBuildHookEvent(raw.hookEventName)
+  );
 }
 
 function sessionId(raw: unknown): string | undefined {
   if (!isRecord(raw)) return undefined;
-  return getString(raw.session_id);
+  return getString(raw.session_id) ?? getString(raw.sessionId);
 }
 
-export class CodexSessionPolicy {
+function resolveCwdValue(raw: unknown): string | undefined {
+  if (!isRecord(raw)) return undefined;
+  return getString(raw.cwd) ?? getString(raw.workspaceRoot);
+}
+
+export class GrokBuildSessionPolicy {
   private readonly completionMinSeconds: number;
   private readonly ttlMs: number;
   private readonly maxSessions: number;
@@ -61,7 +70,7 @@ export class CodexSessionPolicy {
   private readonly sessions = new Map<string, SessionState>();
   private readonly cwdBySession = new Map<string, PinnedCwd>();
 
-  constructor(options: CodexSessionPolicyOptions) {
+  constructor(options: GrokBuildSessionPolicyOptions) {
     this.completionMinSeconds = options.completionMinSeconds;
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
@@ -71,8 +80,8 @@ export class CodexSessionPolicy {
   apply(
     event: IncomingAgentEvent,
     tokenName: string,
-  ): CodexSessionPolicyDecision {
-    if (event.agent !== "codex") return { action: "continue" };
+  ): GrokBuildSessionPolicyDecision {
+    if (event.agent !== "grok-build") return { action: "continue" };
 
     this.prune();
 
@@ -92,6 +101,11 @@ export class CodexSessionPolicy {
         sourceEvent,
         sessionId: id,
       };
+    }
+
+    if (sourceEvent === "StopFailure" || sourceEvent === "StopCancelled") {
+      if (id) this.sessions.delete(this.key(tokenName, id));
+      return { action: "continue", cwd: pinnedCwd };
     }
 
     if (sourceEvent === "Stop") {
@@ -133,10 +147,6 @@ export class CodexSessionPolicy {
       return { action: "continue", cwd: pinnedCwd };
     }
 
-    if (sourceEvent === "PostToolUseFailure" && id) {
-      this.sessions.delete(this.key(tokenName, id));
-    }
-
     return { action: "continue", cwd: pinnedCwd };
   }
 
@@ -158,7 +168,7 @@ export class CodexSessionPolicy {
     const existing = this.cwdBySession.get(key);
     if (existing) return existing.cwd;
 
-    const cwd = isRecord(raw) ? getString(raw.cwd) : undefined;
+    const cwd = resolveCwdValue(raw);
     if (cwd) {
       this.cwdBySession.set(key, { cwd, startedAtMs: this.nowMs() });
       this.enforceMaxCwdSessions();

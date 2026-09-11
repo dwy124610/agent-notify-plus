@@ -3,6 +3,7 @@ import { readFile, rm } from "node:fs/promises";
 import { createApp } from "../../src/server/app.js";
 import { ClaudeCodeSessionPolicy } from "../../src/server/claude-code-session-policy.js";
 import { CodexSessionPolicy } from "../../src/server/codex-session-policy.js";
+import { CursorAgentSessionPolicy } from "../../src/server/cursor-agent-session-policy.js";
 import { CooldownPolicy } from "../../src/server/cooldown-policy.js";
 import { OpenCodeSessionPolicy } from "../../src/server/opencode-session-policy.js";
 import type { NotificationProvider } from "../../src/providers/types.js";
@@ -24,6 +25,8 @@ function appOptions(mockProvider = provider()) {
     claudeCompletionMinSeconds: 0,
     codexCompletionMinSeconds: 0,
     opencodeCompletionMinSeconds: 0,
+    cursorCompletionMinSeconds: 0,
+    grokCompletionMinSeconds: 0,
     cooldownSeconds: 0,
   };
 }
@@ -658,6 +661,118 @@ describe("server app", () => {
       group: "Codex",
       icon: "https://cdn.jsdelivr.net/gh/LetTTGACO/agent-notify@main/assets/codex.png",
     });
+  });
+
+  it("sends Cursor Agent completion after threshold using the last assistant summary", async () => {
+    const mockProvider = provider();
+    let nowMs = 1_000;
+    const policy = new CursorAgentSessionPolicy({
+      completionMinSeconds: 5,
+      nowMs: () => nowMs,
+    });
+    const app = createApp({
+      ...appOptions(mockProvider),
+      cursorCompletionMinSeconds: 5,
+      cursorAgentSessionPolicy: policy,
+    });
+
+    await app.request("/events", {
+      method: "POST",
+      body: JSON.stringify({
+        agent: "cursor-agent",
+        raw: {
+          hook_event_name: "beforeSubmitPrompt",
+          conversation_id: "cursor_long",
+        },
+      }),
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer secret",
+      },
+    });
+
+    nowMs += 6_000;
+
+    const res = await app.request("/events", {
+      method: "POST",
+      body: JSON.stringify({
+        agent: "cursor-agent",
+        raw: {
+          hook_event_name: "stop",
+          conversation_id: "cursor_long",
+          status: "completed",
+          last_assistant_message: "Cursor Agent finished the requested change.",
+        },
+      }),
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer secret",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true });
+    expect(mockProvider.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Ready to review",
+        body: "Cursor Agent finished the requested change.",
+        group: "Cursor Agent",
+      }),
+    );
+  });
+
+  it("sends Cursor Agent failure on aborted stop without waiting for the threshold", async () => {
+    const mockProvider = provider();
+    const policy = new CursorAgentSessionPolicy({
+      completionMinSeconds: 120,
+      nowMs: () => 1_000,
+    });
+    const app = createApp({
+      ...appOptions(mockProvider),
+      cursorCompletionMinSeconds: 120,
+      cursorAgentSessionPolicy: policy,
+    });
+
+    await app.request("/events", {
+      method: "POST",
+      body: JSON.stringify({
+        agent: "cursor-agent",
+        raw: {
+          hook_event_name: "beforeSubmitPrompt",
+          conversation_id: "cursor_aborted",
+        },
+      }),
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer secret",
+      },
+    });
+
+    const res = await app.request("/events", {
+      method: "POST",
+      body: JSON.stringify({
+        agent: "cursor-agent",
+        raw: {
+          hook_event_name: "stop",
+          conversation_id: "cursor_aborted",
+          status: "aborted",
+          error_message: "User stopped the agent",
+        },
+      }),
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer secret",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockProvider.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Failed",
+        body: "User stopped the agent",
+        group: "Cursor Agent",
+      }),
+    );
   });
 
   it("logs a JSONL suppressed entry for Codex UserPromptSubmit", async () => {

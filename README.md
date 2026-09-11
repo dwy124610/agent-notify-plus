@@ -14,12 +14,13 @@ English / [中文](README-CN.md)
 </div>
 
 
-AgentNotify receives hook events from OpenCode, Claude Code, and Codex, formats short action-focused notifications on the server, logs safe event summaries, and pushes them to your phone or desktop via Bark or ntfy.
+AgentNotify receives hook events from OpenCode, Claude Code, Codex, Cursor Agent, and Grok Build, formats short action-focused notifications on the server, logs safe event summaries, and pushes them to your phone or desktop via Bark or ntfy.
 
 ## What it does
 
-- Receives raw hook events from OpenCode, Claude Code, and Codex.
+- Receives raw hook events from OpenCode, Claude Code, Codex, Cursor Agent, and Grok Build.
 - Formats short, action-focused notifications server-side (permission requests, prompts, errors, long-task completion).
+- Puts the agent's final summary into completion and failure notification bodies.
 - Prefixes notification titles with the project name when the agent provides a working directory.
 - Keeps short tasks quiet and only pings when a session has run long enough to matter.
 - Tames rapid notify-handle-continue loops with a session-scoped cooldown for permission/question alerts.
@@ -32,7 +33,9 @@ AgentNotify receives hook events from OpenCode, Claude Code, and Codex, formats 
 | --- | --- | --- |
 | OpenCode | plugin example | permission / question / session-error / idle-completion events |
 | Claude Code | command hook + adapter | `UserPromptSubmit`, selected `Notification`, `Stop`, `StopFailure` |
-| Codex | command hook + adapter | `UserPromptSubmit`, `Stop`, optional `PermissionRequest` |
+| Codex | command hook + adapter | `UserPromptSubmit`, `Stop`, interrupt `PostToolUseFailure`, optional `PermissionRequest` |
+| Cursor Agent | command hook + adapter | `beforeSubmitPrompt`, `afterAgentResponse` (summary cache), `stop` |
+| Grok Build | command hook + adapter | `UserPromptSubmit`, `Stop`, `StopFailure`, `StopCancelled` |
 
 The adapter is fail-safe: server errors never block the agent. Long-task completion is tracked in the AgentNotify server, so adapters stay stateless.
 

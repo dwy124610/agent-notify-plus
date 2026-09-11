@@ -68,6 +68,35 @@ describe("IncomingAgentEvent schema", () => {
     ).toThrow();
   });
 
+  it("accepts a Cursor Agent raw envelope", () => {
+    const event = parseIncomingAgentEvent({
+      agent: "cursor-agent",
+      raw: {
+        hook_event_name: "stop",
+        conversation_id: "cursor_session_1",
+        status: "completed",
+        last_assistant_message: "Updated the notify adapter.",
+      },
+    });
+
+    expect(event.agent).toBe("cursor-agent");
+    expect(event.raw).toMatchObject({ hook_event_name: "stop" });
+  });
+
+  it("accepts a Grok Build raw envelope", () => {
+    const event = parseIncomingAgentEvent({
+      agent: "grok-build",
+      raw: {
+        hook_event_name: "Stop",
+        sessionId: "grok_session_1",
+        lastAssistantMessage: "Done.",
+      },
+    });
+
+    expect(event.agent).toBe("grok-build");
+    expect(event.raw).toMatchObject({ hook_event_name: "Stop" });
+  });
+
   it("rejects unsupported agent names in this MVP", () => {
     expect(() =>
       incomingAgentEventSchema.parse({

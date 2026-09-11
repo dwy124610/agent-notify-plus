@@ -21,6 +21,14 @@ import {
   type CooldownPolicyDecision,
 } from "./cooldown-policy.js";
 import {
+  CursorAgentSessionPolicy,
+  type CursorAgentSessionPolicyDecision,
+} from "./cursor-agent-session-policy.js";
+import {
+  GrokBuildSessionPolicy,
+  type GrokBuildSessionPolicyDecision,
+} from "./grok-build-session-policy.js";
+import {
   OpenCodeSessionPolicy,
   type OpenCodeSessionPolicyDecision,
 } from "./opencode-session-policy.js";
@@ -37,6 +45,10 @@ export interface CreateAppOptions {
   codexSessionPolicy?: CodexSessionPolicy;
   opencodeCompletionMinSeconds: number;
   opencodeSessionPolicy?: OpenCodeSessionPolicy;
+  cursorCompletionMinSeconds: number;
+  cursorAgentSessionPolicy?: CursorAgentSessionPolicy;
+  grokCompletionMinSeconds: number;
+  grokBuildSessionPolicy?: GrokBuildSessionPolicy;
   cooldownSeconds: number;
   cooldownPolicy?: CooldownPolicy;
 }
@@ -73,6 +85,16 @@ export function createApp(options: CreateAppOptions): Hono {
     options.opencodeSessionPolicy ??
     new OpenCodeSessionPolicy({
       completionMinSeconds: options.opencodeCompletionMinSeconds,
+    });
+  const cursorAgentSessionPolicy =
+    options.cursorAgentSessionPolicy ??
+    new CursorAgentSessionPolicy({
+      completionMinSeconds: options.cursorCompletionMinSeconds,
+    });
+  const grokBuildSessionPolicy =
+    options.grokBuildSessionPolicy ??
+    new GrokBuildSessionPolicy({
+      completionMinSeconds: options.grokCompletionMinSeconds,
     });
   const cooldownPolicy =
     options.cooldownPolicy ??
@@ -146,6 +168,58 @@ export function createApp(options: CreateAppOptions): Hono {
     tokenName: string,
     incomingAgent: "opencode",
     decision: Exclude<OpenCodeSessionPolicyDecision, { action: "continue" }>,
+  ): Promise<void> {
+    trace("suppressed", {
+      receivedAt,
+      tokenName,
+      agent: incomingAgent,
+      sourceEvent: decision.sourceEvent,
+      sessionId: decision.sessionId,
+      reason: decision.reason,
+    });
+    await safeLog({
+      receivedAt,
+      status: "suppressed",
+      tokenName,
+      agent: incomingAgent,
+      kind: "state",
+      sessionId: decision.sessionId,
+      sourceEvent: decision.sourceEvent,
+      reason: decision.reason,
+    });
+  }
+
+  async function logSuppressedCursorAgentEvent(
+    receivedAt: string,
+    tokenName: string,
+    incomingAgent: "cursor-agent",
+    decision: Exclude<CursorAgentSessionPolicyDecision, { action: "continue" }>,
+  ): Promise<void> {
+    trace("suppressed", {
+      receivedAt,
+      tokenName,
+      agent: incomingAgent,
+      sourceEvent: decision.sourceEvent,
+      sessionId: decision.sessionId,
+      reason: decision.reason,
+    });
+    await safeLog({
+      receivedAt,
+      status: "suppressed",
+      tokenName,
+      agent: incomingAgent,
+      kind: "state",
+      sessionId: decision.sessionId,
+      sourceEvent: decision.sourceEvent,
+      reason: decision.reason,
+    });
+  }
+
+  async function logSuppressedGrokBuildEvent(
+    receivedAt: string,
+    tokenName: string,
+    incomingAgent: "grok-build",
+    decision: Exclude<GrokBuildSessionPolicyDecision, { action: "continue" }>,
   ): Promise<void> {
     trace("suppressed", {
       receivedAt,
@@ -286,12 +360,46 @@ export function createApp(options: CreateAppOptions): Hono {
       return c.json({ ok: true, notified: false });
     }
 
+    const cursorPolicyDecision = cursorAgentSessionPolicy.apply(
+      incoming,
+      auth.tokenName!,
+    );
+
+    if (cursorPolicyDecision.action === "suppress") {
+      await logSuppressedCursorAgentEvent(
+        receivedAt,
+        auth.tokenName!,
+        "cursor-agent",
+        cursorPolicyDecision,
+      );
+      return c.json({ ok: true, notified: false });
+    }
+
+    const grokPolicyDecision = grokBuildSessionPolicy.apply(
+      incoming,
+      auth.tokenName!,
+    );
+
+    if (grokPolicyDecision.action === "suppress") {
+      await logSuppressedGrokBuildEvent(
+        receivedAt,
+        auth.tokenName!,
+        "grok-build",
+        grokPolicyDecision,
+      );
+      return c.json({ ok: true, notified: false });
+    }
+
     const matchingDecision =
       incoming.agent === "claude-code"
         ? policyDecision
         : incoming.agent === "codex"
           ? codexPolicyDecision
-          : opencodePolicyDecision;
+          : incoming.agent === "cursor-agent"
+            ? cursorPolicyDecision
+            : incoming.agent === "grok-build"
+              ? grokPolicyDecision
+              : opencodePolicyDecision;
 
     let formatted;
     try {

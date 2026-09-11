@@ -44,6 +44,8 @@ Before touching anything, ask the user two things. These are not sensitive, so t
    - OpenCode
    - Claude Code
    - Codex
+   - Cursor Agent
+   - Grok Build
 
 2. **What device(s) will the user mainly receive notifications on?** (used to pick the Provider)
 
@@ -122,7 +124,7 @@ Explain to the user:
 - `AGENT_NOTIFY_TOKENS` has the format `name:token` — the colon is required. The `macbook:` part is a name label (keep it or change to anything); the part **after the colon** is the real token. Remember it — Step 2's agent config `token` must be this exact same string.
 - Use a hard-to-guess random string for the token.
 - **`AGENT_NOTIFY_LANGUAGE` — judge this yourself from the conversation, do not ask.** It defaults to `en` (English). If the user is talking to you in Chinese (or asks for Chinese notifications), have them set it to `zh`; otherwise leave it `en`. You decide based on the language the user is using, then tell them the one value to set — no surveying.
-- Every other line (`AGENT_NOTIFY_HOST`, `AGENT_NOTIFY_PORT`, `AGENT_NOTIFY_*_COMPLETION_MIN_SECONDS`, `AGENT_NOTIFY_COOLDOWN_SECONDS`, `AGENT_NOTIFY_LOG_PATH`, `AGENT_NOTIFY_LOG_RAW`, and the inactive Provider's endpoint) **stays at default — do not touch**.
+- Every other line (`AGENT_NOTIFY_HOST`, `AGENT_NOTIFY_PORT`, `AGENT_NOTIFY_*_COMPLETION_MIN_SECONDS` including Cursor Agent, `AGENT_NOTIFY_COOLDOWN_SECONDS`, `AGENT_NOTIFY_LOG_PATH`, `AGENT_NOTIFY_LOG_RAW`, and the inactive Provider's endpoint) **stays at default — do not touch**.
 
 > Do not ask the user what the token/endpoint is, and do not write these values into the conversation or any file. Only confirm "done yet?".
 
@@ -179,6 +181,8 @@ The default config directories are:
 | OpenCode | `~/.config/opencode/` |
 | Claude Code | `~/.claude/` |
 | Codex | `~/.codex/` |
+| Cursor Agent | `~/.cursor/` |
+| Grok Build | `~/.grok/` |
 
 A missing config directory does not prove the agent can never be used, but it does mean the agent is not ready for hook installation in the normal path. If a selected agent does not appear to be installed or initialized, stop and ask the user whether they want to install/open that agent first, or skip it for now and continue AgentNotify setup only for the agents that are ready. Do **not** copy plugin/hook files for an agent whose config location is not available.
 
@@ -189,6 +193,7 @@ Before copying files for a selected agent, check whether AgentNotify files or ho
 | OpenCode | OpenCode plugin file `plugins/agent-notify.ts` under the OpenCode dir, and `agent-notify.json` under the OpenCode dir |
 | Claude Code | `claude-code.json` and `claude-code-agent-notify.mjs` under the agent-notify config dir, and AgentNotify hook commands in Claude Code settings |
 | Codex | `codex.json` and `codex-agent-notify.mjs` under the agent-notify config dir, and AgentNotify hook commands in Codex hooks |
+| Cursor Agent | `cursor-agent.json` and `cursor-agent-notify.mjs` under the agent-notify config dir, and AgentNotify commands in `~/.cursor/hooks.json` |
 
 Also check for the `agent-notify` skill for each selected agent:
 
@@ -197,6 +202,7 @@ Also check for the `agent-notify` skill for each selected agent:
 | OpenCode | `~/.config/opencode/skills/agent-notify/SKILL.md` |
 | Claude Code | `~/.claude/skills/agent-notify/SKILL.md` |
 | Codex | `~/.codex/skills/agent-notify/SKILL.md` |
+| Cursor Agent | `~/.cursor/skills/agent-notify/SKILL.md` |
 
 Only check existence, whether hook commands reference the AgentNotify adapter, and whether the skill file already exists. Do **not** print, collect, or summarize token values from existing config files.
 
@@ -213,6 +219,8 @@ If any selected agent already has AgentNotify files, hook entries, or skill file
 | Claude Code settings | `~/.claude/settings.json` (managed by Claude Code) |
 | Codex skill | `~/.codex/skills/agent-notify/SKILL.md` |
 | Codex hooks | `~/.codex/hooks.json` |
+| Cursor Agent skill | `~/.cursor/skills/agent-notify/SKILL.md` |
+| Cursor Agent hooks | `~/.cursor/hooks.json` |
 
 > Keep the destination locations consistent with the paths used by the adapters.
 >
@@ -309,6 +317,36 @@ printf '%s\n' ~/.config/agent-notify/codex-agent-notify.mjs
 
 → Go to Step 3.
 
+### 2.4 Cursor Agent
+
+**Where to copy from/to** (run in the project dir):
+
+```bash
+mkdir -p ~/.config/agent-notify
+cp examples/cursor-agent/cursor-agent.json ~/.config/agent-notify/cursor-agent.json
+cp examples/cursor-agent/cursor-agent-notify.mjs ~/.config/agent-notify/cursor-agent-notify.mjs
+
+mkdir -p ~/.cursor/skills/agent-notify
+cp examples/cursor-agent/skills/agent-notify/SKILL.md ~/.cursor/skills/agent-notify/SKILL.md
+```
+
+**What to change after copying** (guide the user to open `~/.config/agent-notify/cursor-agent.json` and change only `token`):
+
+```json
+{
+  "serverUrl": "http://127.0.0.1:8787",
+  "token": "<the part after the colon in the server's AGENT_NOTIFY_TOKENS>"
+}
+```
+
+**Get the adapter's absolute path**:
+
+```bash
+printf '%s\n' ~/.config/agent-notify/cursor-agent-notify.mjs
+```
+
+→ Go to Step 3.
+
 ---
 
 ## Step 3 — Configure agent hooks
@@ -355,12 +393,36 @@ Merge the block below into the user-level `~/.codex/hooks.json`; if hooks alread
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "node /ABS/PATH/.config/agent-notify/codex-agent-notify.mjs", "timeout": 5 } ] }
+    ],
+    "PostToolUseFailure": [
+      { "hooks": [ { "type": "command", "command": "node /ABS/PATH/.config/agent-notify/codex-agent-notify.mjs", "timeout": 5 } ] }
     ]
   }
 }
 ```
 
 **Important — remind the user:** on first install or whenever the command path changes, opening Codex will request authorization. They must choose review and trust this hook. Until trusted, Codex skips non-managed hooks — this is the most common "configured but not working" cause for Codex.
+
+### 3.3 Cursor Agent hooks
+
+Merge the block below into user-level `~/.cursor/hooks.json`. If hooks already exist, append these commands; do not overwrite unrelated hooks.
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      { "command": "node /ABS/PATH/.config/agent-notify/cursor-agent-notify.mjs", "timeout": 5 }
+    ],
+    "afterAgentResponse": [
+      { "command": "node /ABS/PATH/.config/agent-notify/cursor-agent-notify.mjs", "timeout": 5 }
+    ],
+    "stop": [
+      { "command": "node /ABS/PATH/.config/agent-notify/cursor-agent-notify.mjs", "timeout": 5 }
+    ]
+  }
+}
+```
 
 ---
 
@@ -380,7 +442,11 @@ After restarting Claude Code, trigger an operation that needs permission or a qu
 
 Open Codex, confirm the hook is trusted if Codex asks, then trigger an operation that needs approval. For example, lower Codex's permissions and run a shell command that requires approval. A notification titled `Approve permission` / `需要批准` should arrive.
 
-### 4.4 When no notification arrives
+### 4.4 Cursor Agent
+
+After Cursor reloads hooks, run a task long enough to pass the completion threshold. A completion notification should arrive. Abnormal termination (`stop` with `aborted` / `error`) should push a failure notification immediately.
+
+### 4.5 When no notification arrives
 
 Do not guess in the conversation. Refer to the human manual `docs/human-manual-en.md`, "Troubleshooting" section, which has a full per-agent troubleshooting checklist (including `debugLogPath` usage, manually testing the adapter with a payload, and reading `provider_failed` in `data/events.jsonl`). Just walk the checklist with the user.
 
@@ -390,7 +456,7 @@ Quick triage:
 - Server received the event but the phone got nothing → provider endpoint issue; check `provider_failed` in `data/events.jsonl`.
 - 401 → token mismatch: check that the agent config's `token` equals the part after the colon on the server.
 
-### 4.5 Send a test notification (optional)
+### 4.6 Send a test notification (optional)
 
 To confirm the provider link works, ask the user whether to send a test notification. If they agree, run:
 

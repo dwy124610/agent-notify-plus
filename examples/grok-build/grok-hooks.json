@@ -1,0 +1,48 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /ABS/PATH/.config/agent-notify/grok-build-agent-notify.mjs",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /ABS/PATH/.config/agent-notify/grok-build-agent-notify.mjs",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /ABS/PATH/.config/agent-notify/grok-build-agent-notify.mjs",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "StopCancelled": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /ABS/PATH/.config/agent-notify/grok-build-agent-notify.mjs",
+            "timeout": 8
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -74,6 +74,21 @@ describe("Claude Code formatter", () => {
     });
   });
 
+  it("formats Stop using last_assistant_message", () => {
+    const formatted = formatClaudeCodeEvent({
+      agent: "claude-code",
+      raw: {
+        hook_event_name: "Stop",
+        session_id: "claude_session_summary",
+        last_assistant_message: "Added Bark Docker deploy and wired Claude Stop summaries.",
+      },
+    });
+
+    expect(formatted.notification.body).toBe(
+      "Added Bark Docker deploy and wired Claude Stop summaries.",
+    );
+  });
+
   it("formats StopFailure as a failed notification with error details", () => {
     const formatted = formatClaudeCodeEvent({
       agent: "claude-code",

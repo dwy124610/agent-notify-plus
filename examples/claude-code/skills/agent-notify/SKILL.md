@@ -60,14 +60,15 @@ Supported commands:
 
 Determine the active AI agent before choosing response text or reading status.
 Use the agent that is actually running this conversation, such as OpenCode,
-Claude Code, or Codex. Do not assume the agent from the directory where this
-skill was loaded.
+Claude Code, Codex, or Cursor Agent. Do not assume the agent from the directory
+where this skill was loaded.
 
 Use the matching state file for that agent:
 
 - OpenCode: `$HOME/.config/agent-notify/state/opencode.json`
 - Claude Code: `$HOME/.config/agent-notify/state/claude-code.json`
 - Codex: `$HOME/.config/agent-notify/state/codex.json`
+- Cursor Agent: `$HOME/.config/agent-notify/state/cursor-agent.json`
 
 If the current agent cannot be determined, do not guess a state file. For
 `status`, say that AgentNotify cannot determine the current AI agent from the

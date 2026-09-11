@@ -19,6 +19,8 @@ const app = createApp({
   claudeCompletionMinSeconds: config.claudeCompletionMinSeconds,
   codexCompletionMinSeconds: config.codexCompletionMinSeconds,
   opencodeCompletionMinSeconds: config.opencodeCompletionMinSeconds,
+  cursorCompletionMinSeconds: config.cursorCompletionMinSeconds,
+  grokCompletionMinSeconds: config.grokCompletionMinSeconds,
   cooldownSeconds: config.cooldownSeconds,
 });
 

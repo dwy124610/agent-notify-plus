@@ -10,6 +10,7 @@ import {
 import { prefixTitleWithProject } from "./project-title.js";
 
 const MAX_BODY_LENGTH = 80;
+const MAX_SUMMARY_LENGTH = 280;
 const OPENCODE_ICON_URL = "https://opencode.ai/apple-touch-icon.png";
 
 type UnknownRecord = Record<string, unknown>;
@@ -122,8 +123,21 @@ function completedTitle(language: NotificationLanguage): string {
   return language === "zh" ? "待审阅" : "Ready to review";
 }
 
-function completedBody(language: NotificationLanguage): string {
+function completedFallback(language: NotificationLanguage): string {
   return language === "zh" ? "看看结果或下一步" : "Review results or next steps";
+}
+
+function completionBody(
+  raw: UnknownRecord,
+  properties: UnknownRecord,
+  language: NotificationLanguage,
+): string {
+  return truncate(
+    getString(properties.last_assistant_message) ??
+      getString(raw.last_assistant_message) ??
+      completedFallback(language),
+    MAX_SUMMARY_LENGTH,
+  );
 }
 
 function questionBody(properties: UnknownRecord, language: NotificationLanguage): string {
@@ -208,7 +222,7 @@ export function formatOpenCodeEvent(
       sessionId: getString(properties.sessionID) ?? getString(raw.sessionID),
       notification: {
         title: title(completedTitle(language)),
-        body: completedBody(language),
+        body: completionBody(raw, properties, language),
         urgency: "time_sensitive",
         group: "OpenCode",
         icon: OPENCODE_ICON_URL,
@@ -231,7 +245,7 @@ export function formatOpenCodeEvent(
       sessionId: getString(properties.sessionID) ?? getString(raw.sessionID),
       notification: {
         title: title(failedTitle(language)),
-        body: truncate(body),
+        body: truncate(body, MAX_SUMMARY_LENGTH),
         urgency: "time_sensitive",
         group: "OpenCode",
         icon: OPENCODE_ICON_URL,
